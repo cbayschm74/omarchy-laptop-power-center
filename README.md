@@ -5,6 +5,8 @@ combines battery charge protection, power profiles, reversible travel controls,
 energy-saving switches, and optional NVIDIA GPU status and mode controls in one
 panel.
 
+![Laptop Power Center panel showing battery health, power profiles, travel controls, and GPU status](preview.png)
+
 Unsupported controls are hidden automatically, so the panel can be used on
 laptops that provide only some of these capabilities.
 
