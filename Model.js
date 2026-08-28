@@ -38,11 +38,32 @@ function parseProfiles(raw, previousIndex) {
   }
 }
 
+function limitDescription(state, policy) {
+  var active = state === "enabled"
+  if (policy === "firmware") return (active ? "Uses" : "Use") + " firmware optimized charging"
+  if (!policy || policy === "unknown") return (active ? "Uses" : "Use") + " the battery's health-preserving policy"
+
+  var thresholds = policy.split("-")
+  if (thresholds.length === 2) {
+    return (active ? "Starts charging at " : "Start charging at ") + thresholds[0] + "% and "
+      + (active ? "stops" : "stop") + " at " + thresholds[1] + "%"
+  }
+
+  return (active ? "Stops charging at " : "Limit charging to ") + policy + "%"
+}
+
 function profileIcon(name) {
   if (name === "power-saver") return "󰌪"
   if (name === "balanced") return "󰊚"
   if (name === "performance") return "󰓅"
   return "󰂄"
+}
+
+function gpuPowerLabel(state) {
+  if (state === "active") return "Active"
+  if (state === "suspended") return "Sleeping"
+  if (state === "disabled") return "Disabled"
+  return "Unavailable"
 }
 
 function batteryFraction(device) {
@@ -95,7 +116,9 @@ if (typeof module !== "undefined") {
     selectProfileIndex: selectProfileIndex,
     parseKeyValue: parseKeyValue,
     parseProfiles: parseProfiles,
+    limitDescription: limitDescription,
     profileIcon: profileIcon,
+    gpuPowerLabel: gpuPowerLabel,
     batteryFraction: batteryFraction,
     chargeThresholdActive: chargeThresholdActive,
     batteryIcon: batteryIcon,

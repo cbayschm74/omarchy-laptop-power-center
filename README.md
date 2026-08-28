@@ -1,56 +1,117 @@
-# Omarchy Laptop GPU Modes
+# Laptop Power Center for Omarchy
 
-A theme-aware Omarchy power-panel plugin for laptops with NVIDIA hybrid graphics.
-It adds Integrated, Hybrid, and VFIO mode controls below the existing power-profile controls.
+A theme-aware replacement for Omarchy's built-in laptop power widget. It
+combines battery charge protection, power profiles, reversible travel controls,
+energy-saving switches, and optional NVIDIA GPU status and mode controls in one
+panel.
 
-## What it does
+Unsupported controls are hidden automatically, so the panel can be used on
+laptops that provide only some of these capabilities.
 
-- Shows the current `supergfxctl` graphics mode.
-- Discovers whether an NVIDIA GPU and usable `supergfxctl` installation are available.
-- Hides the GPU controls on unsupported hardware or systems without `supergfxctl`.
-- Uses Omarchy’s existing panel, button, spacing, color, and dialog components.
-- Reports any pending action and target mode from `supergfxctl` so users know when a logout or reboot is needed.
-- Requests mode changes through the installed `supergfxctl` client and daemon.
-- Leaves transition and authorization policy to `supergfxd` and the system’s polkit setup.
-- Requires confirmation before applying a mode change.
+## Features
 
-The daemon decides whether a mode transition is immediate or requires a logout/reboot. The plugin asks for confirmation before applying the change and does not automatically reboot the machine.
+- Shows battery level, capacity, charge cycles, charge rate, and remaining time.
+- Enables or disables firmware-backed battery charge protection through UPower.
+- Switches between the power profiles available on the system.
+- Provides CPU Turbo, Wi-Fi power-saving, and reversible 40% Quick Dim controls.
+- Provides a Travel Mode that saves the current profile, Turbo, Wi-Fi, and
+  brightness state; applies energy-saving values; and restores the saved state
+  when disabled.
+- Reports whether an NVIDIA GPU is active, sleeping, disabled, or unavailable.
+- Shows GPU mode controls only when an NVIDIA GPU and a usable `supergfxctl`
+  installation report more than one supported mode.
+- Uses Omarchy's standard panel, spacing, colors, buttons, confirmation dialogs,
+  and keyboard navigation.
+
+Travel Mode deliberately leaves GPU mode unchanged because a GPU transition
+may require a logout or reboot and may be unsupported by the laptop firmware.
+Its restore point is session-oriented and intentionally expires at reboot.
 
 ## Requirements
 
 - Omarchy with the Quickshell plugin system.
-- `supergfxctl` installed and able to communicate with `supergfxd`.
-- An NVIDIA GPU supported by the installed `supergfxd` configuration.
+- `upower`, `busctl`, and `powerprofilesctl`, normally provided by Omarchy.
+- `pkexec` for graphical authorization when changing privileged energy controls.
+- `iw` for Wi-Fi power-saving control. The switch is hidden when unsupported.
+- A writable kernel backlight interface for Quick Dim. The switch is hidden when
+  unsupported.
+- Intel P-state Turbo control for the Turbo switch. The switch is hidden when
+  unsupported.
+- Optional: `supergfxctl` and a working `supergfxd` configuration for GPU modes.
+
+Actual feature support depends on the laptop firmware, kernel drivers, UPower,
+NetworkManager, and vendor GPU tooling.
 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/Minokai69/omarchy-laptop-gpu-modes.git --enable
-omarchy restart shell
+omarchy plugin add https://github.com/cbayschm74/omarchy-laptop-power-center.git --enable
 ```
 
-Open the battery/power menu. GPU modes appear below Power Profile.
+The manifest declares this plugin as a clone of `omarchy.power`, so enabling it
+replaces the built-in power widget in place instead of adding a second battery
+widget. Open the battery icon in the bar to access the panel.
 
 ## Use
 
-Select Integrated, Hybrid, or VFIO. Authenticate when prompted, confirm the reboot, and save work before applying the change.
+Battery Health appears only when UPower reports charge-threshold support.
+Energy controls appear only when their corresponding kernel or system feature
+is available.
 
-- **Integrated**: AMD/iGPU display mode with the NVIDIA GPU powered down.
-- **Hybrid**: AMD drives the display; NVIDIA is available for application offloading.
-- **VFIO**: reserves the GPU for virtual-machine PCI passthrough.
+When GPU mode controls are available, selecting a reported mode sends the
+request to the installed `supergfxctl` client after confirmation. The daemon
+decides whether the transition can be applied and whether a logout or reboot is
+required. Some laptops expose GPU selection only in firmware; on those systems,
+the reported GPU state may be informational and mode changes may fail or time
+out.
 
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.minokai69.laptop-gpu-modes
-omarchy restart shell
+omarchy plugin disable io.github.cbayschm74.laptop-power-center
+omarchy plugin remove io.github.cbayschm74.laptop-power-center
 ```
 
-Removing the plugin does not change the current system GPU mode. Choose a desired mode before removal if needed.
+Disabling or removing the plugin restores the built-in Omarchy power widget. It
+does not change the current charge threshold, GPU mode, power profile, or other
+hardware settings.
 
-## Safety
+## Security and privileged operations
 
-The plugin runs unsandboxed Quickshell code, but it does not ship a privileged helper or write system configuration files directly. It only invokes the installed `supergfxctl -m` client with one of the modes reported by `supergfxctl -s`. Authorization and transition behavior remain controlled by `supergfxd` and the system’s polkit configuration.
+Omarchy plugins run as unsandboxed user code. Review third-party plugins before
+installing them.
+
+- Battery charge protection calls UPower's D-Bus charge-threshold method.
+- GPU requests invoke the installed `supergfxctl` client with a mode it reports
+  as supported.
+- Energy changes use a bundled helper that accepts only the fixed operations
+  `travel`, `turbo`, `wifi`, and `quick-dim`, each with `enable` or `disable`.
+- `pkexec` provides graphical authorization for the privileged energy helper.
+- Reversible Travel Mode state is non-secret, root-owned, stored under `/run`,
+  and removed at reboot.
+
+## Credits and provenance
+
+This is a derivative combined project, not a claim of sole original authorship.
+It preserves and extends work from:
+
+- [Omarchy](https://github.com/basecamp/omarchy), whose built-in power panel is
+  the visual and functional base.
+- [Omarchy Laptop GPU Modes](https://github.com/Minokai69/omarchy-laptop-gpu-modes)
+  by Minokai-Dev, which provides the original GPU integration and Git history.
+- [Battery Health for Omarchy](https://github.com/patcastle/omarchy-battery-health)
+  by Patrick Castiglia, which provides the original UPower charge-threshold
+  integration.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for detailed attribution
+and [LICENSE](LICENSE) for all retained MIT copyright notices.
+
+## Development
+
+```bash
+omarchy plugin validate .
+./test.sh
+```
 
 ## License
 

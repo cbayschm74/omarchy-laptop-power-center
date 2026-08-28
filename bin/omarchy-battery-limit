@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Adapted from patcastle/omarchy-battery-health under the MIT License.
+# See ../THIRD_PARTY_NOTICES.md and ../LICENSE.
+
+case "$*" in
+  "" | status) action=status; shell_output=false ;;
+  --shell | "status --shell") action=status; shell_output=true ;;
+  enable | disable) action="$1"; shell_output=false ;;
+  *)
+    echo "Usage: omarchy-battery-limit [status|enable|disable] [--shell]" >&2
+    exit 2
+    ;;
+esac
+
+upower_property() {
+  local raw value
+
+  raw=$(busctl get-property org.freedesktop.UPower "$1" org.freedesktop.UPower.Device "$2" 2>/dev/null) || return 1
+  read -r _ value <<<"$raw"
+  value=${value#\"}
+  value=${value%\"}
+  printf '%s\n' "$value"
+}
+
+power_supply_root=/sys/class/power_supply
+if (( EUID != 0 )) && [[ ${OMARCHY_BATTERY_TEST_MODE:-0} == 1 ]]; then
+  power_supply_root=${OMARCHY_BATTERY_POWER_SUPPLY_ROOT:-$power_supply_root}
+fi
+
+threshold_value() {
+  local directory=$1 candidate
+  shift
+  for candidate in "$@"; do
+    [[ -r $directory/$candidate ]] || continue
+    cat "$directory/$candidate"
+    return
+  done
+  return 1
+}
+
+live_thresholds() {
+  local native=$1 directory start end state
+  [[ $native =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  directory=$power_supply_root/$native
+  [[ -d $directory ]] || return 1
+
+  start=$(threshold_value "$directory" charge_control_start_threshold charge_start_threshold 2>/dev/null || true)
+  end=$(threshold_value "$directory" charge_control_end_threshold charge_stop_threshold 2>/dev/null || true)
+  [[ $start =~ ^[0-9]+$ || $end =~ ^[0-9]+$ ]] || return 1
+
+  state=false
+  if [[ $end =~ ^[0-9]+$ ]] && (( end < 100 )); then
+    state=true
+  elif [[ $start =~ ^[0-9]+$ ]] && (( start > 0 )); then
+    state=true
+  fi
+  printf '%s\t%s\t%s\n' "$state" "$start" "$end"
+}
+
+declare -a batteries=()
+enabled=true
+policy=unknown
+
+while IFS= read -r device; do
+  [[ $device != */DisplayDevice ]] || continue
+  [[ $(upower_property "$device" ChargeThresholdSupported || true) == true ]] || continue
+
+  batteries+=("$device")
+  device_enabled=$(upower_property "$device" ChargeThresholdEnabled || true)
+  settings=$(upower_property "$device" ChargeThresholdSettingsSupported || true)
+  start=$(upower_property "$device" ChargeStartThreshold || true)
+  end=$(upower_property "$device" ChargeEndThreshold || true)
+  native=$(upower_property "$device" NativePath || true)
+
+  # A threshold set by firmware or another OS can remain active even though
+  # UPower did not enable it itself. Treat an effective non-full threshold as
+  # enabled so the UI reflects the hardware and one click can restore 100%.
+  effective_enabled=$device_enabled
+  live=$(live_thresholds "$native" || true)
+  if [[ -n $live ]]; then
+    IFS=$'\t' read -r effective_enabled live_start live_end <<<"$live"
+    [[ $live_start =~ ^[0-9]+$ ]] && start=$live_start
+    [[ $live_end =~ ^[0-9]+$ ]] && end=$live_end
+  elif [[ $settings =~ ^[0-9]+$ ]]; then
+    if (( (settings & 2) != 0 )) && [[ $end =~ ^[0-9]+$ ]] && (( end < 100 )); then
+      effective_enabled=true
+    elif (( (settings & 1) != 0 )) && [[ $start =~ ^[0-9]+$ ]] && (( start > 0 )); then
+      effective_enabled=true
+    fi
+  fi
+  [[ $effective_enabled == true ]] || enabled=false
+
+  if [[ $policy == unknown ]]; then
+    if [[ $effective_enabled == true && $end =~ ^[0-9]+$ ]] && (( end < 100 )); then
+      if (( (settings & 1) != 0 )) && [[ $start =~ ^[0-9]+$ ]] && (( start < end )); then
+        policy="$start-$end"
+      else
+        policy="$end"
+      fi
+    elif [[ $settings =~ ^[0-9]+$ ]] && (( (settings & 4) != 0 )); then
+      policy=firmware
+    fi
+  fi
+done < <(upower -e 2>/dev/null)
+
+if (( ${#batteries[@]} == 0 )); then
+  state=unsupported
+elif [[ $enabled == true ]]; then
+  state=enabled
+else
+  state=disabled
+fi
+
+if [[ $action == status ]]; then
+  if [[ $shell_output == true ]]; then
+    printf 'state\t%s\npolicy\t%s\n' "$state" "$policy"
+  else
+    case "$state" in
+      unsupported) echo "Battery protection is not supported" ;;
+      enabled) echo "Battery protection is enabled" ;;
+      disabled) echo "Battery protection is disabled" ;;
+    esac
+  fi
+  exit 0
+fi
+
+if [[ $state == unsupported ]]; then
+  echo "Battery charge limits are not supported by UPower on this system" >&2
+  exit 1
+fi
+
+[[ $action == enable ]] && desired=true || desired=false
+failed=false
+
+for device in "${batteries[@]}"; do
+  if ! busctl call org.freedesktop.UPower "$device" org.freedesktop.UPower.Device EnableChargeThreshold b "$desired" >/dev/null; then
+    echo "Failed to update charge limits for $device" >&2
+    failed=true
+  fi
+done
+
+[[ $failed == false ]] || exit 1
+echo "Battery protection ${action}d"

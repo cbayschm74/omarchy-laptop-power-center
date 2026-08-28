@@ -1,0 +1,293 @@
+#!/bin/bash
+
+# Part of Laptop Power Center. See ../THIRD_PARTY_NOTICES.md and ../LICENSE.
+
+set -euo pipefail
+
+usage() {
+  echo "Usage: omarchy-energy-controls status --shell | {travel|turbo|wifi|quick-dim} {enable|disable}" >&2
+  exit 2
+}
+
+action=${1:-}
+value=${2:-}
+actor_uid=${PKEXEC_UID:-$(id -u)}
+test_mode=${OMARCHY_ENERGY_TEST_MODE:-0}
+[[ $actor_uid =~ ^[0-9]+$ ]] || { echo "Invalid authorization identity" >&2; exit 1; }
+
+if (( EUID != 0 )) && [[ $test_mode == 1 ]]; then
+  PATH=${OMARCHY_ENERGY_TEST_PATH:-/usr/bin:/bin}
+else
+  PATH=/usr/bin:/bin
+fi
+
+if (( EUID == 0 )); then
+  state_root=/run/omarchy-laptop-power-center
+  no_turbo_path=/sys/devices/system/cpu/intel_pstate/no_turbo
+  brightness_path=""
+  brightness_max_path=""
+  wifi_override=""
+  nvidia_override=""
+else
+  state_root=${OMARCHY_ENERGY_STATE_ROOT:-/run/omarchy-laptop-power-center}
+  no_turbo_path=${OMARCHY_ENERGY_NO_TURBO_PATH:-/sys/devices/system/cpu/intel_pstate/no_turbo}
+  brightness_path=${OMARCHY_ENERGY_BRIGHTNESS_PATH:-}
+  brightness_max_path=${OMARCHY_ENERGY_BRIGHTNESS_MAX_PATH:-}
+  wifi_override=${OMARCHY_ENERGY_WIFI_IFACE:-}
+  nvidia_override=${OMARCHY_ENERGY_NVIDIA_PATH:-}
+fi
+
+state_dir="$state_root/$actor_uid"
+travel_state="$state_dir/travel-state"
+dim_state="$state_dir/quick-dim-state"
+
+require_privilege() {
+  if (( EUID != 0 )) && [[ $test_mode != 1 ]]; then
+    echo "Authentication is required to change energy controls" >&2
+    exit 1
+  fi
+}
+
+ensure_state_dir() {
+  if (( EUID == 0 )); then
+    install -d -m 0755 -o root -g root "$state_root" "$state_dir"
+  else
+    mkdir -p "$state_dir"
+    chmod 0700 "$state_root" "$state_dir" 2>/dev/null || true
+  fi
+}
+
+write_state() {
+  local destination=$1
+  shift
+  local temporary
+  ensure_state_dir
+  temporary=$(mktemp "$state_dir/.state.XXXXXX")
+  chmod 0644 "$temporary"
+  while (( $# >= 2 )); do
+    printf '%s\t%s\n' "$1" "$2" >>"$temporary"
+    shift 2
+  done
+  mv -f -- "$temporary" "$destination"
+}
+
+read_state() {
+  local source=$1 key=$2
+  [[ -r $source ]] || return 1
+  awk -F '\t' -v wanted="$key" '$1 == wanted { print $2; exit }' "$source"
+}
+
+turbo_state() {
+  [[ -r $no_turbo_path ]] || { echo unsupported; return; }
+  case $(<"$no_turbo_path") in
+    0) echo enabled ;;
+    1) echo disabled ;;
+    *) echo unsupported ;;
+  esac
+}
+
+set_turbo() {
+  local requested=$1
+  [[ -w $no_turbo_path ]] || { echo "CPU Turbo control is unavailable" >&2; return 1; }
+  [[ $requested == enabled ]] && printf '0\n' >"$no_turbo_path" || printf '1\n' >"$no_turbo_path"
+}
+
+wifi_interface() {
+  if [[ -n $wifi_override ]]; then
+    printf '%s\n' "$wifi_override"
+    return
+  fi
+
+  local candidate
+  for candidate in /sys/class/net/*; do
+    [[ -d $candidate/wireless ]] || continue
+    basename "$candidate"
+    return
+  done
+  return 1
+}
+
+wifi_state() {
+  local interface output
+  interface=$(wifi_interface 2>/dev/null) || { echo unsupported; return; }
+  output=$(iw dev "$interface" get power_save 2>/dev/null) || { echo unsupported; return; }
+  case ${output##*: } in
+    on) echo enabled ;;
+    off) echo disabled ;;
+    *) echo unsupported ;;
+  esac
+}
+
+set_wifi() {
+  local requested=$1 interface setting
+  interface=$(wifi_interface 2>/dev/null) || return 0
+  [[ $requested == enabled ]] && setting=on || setting=off
+  iw dev "$interface" set power_save "$setting"
+}
+
+discover_backlight() {
+  if [[ -n $brightness_path && -n $brightness_max_path ]]; then
+    return
+  fi
+
+  local device
+  for device in /sys/class/backlight/*; do
+    [[ -r $device/brightness && -r $device/max_brightness ]] || continue
+    brightness_path="$device/brightness"
+    brightness_max_path="$device/max_brightness"
+    return
+  done
+  return 1
+}
+
+brightness_raw() {
+  discover_backlight || { echo unsupported; return; }
+  cat "$brightness_path"
+}
+
+brightness_percent() {
+  local current maximum
+  discover_backlight || { echo unsupported; return; }
+  current=$(<"$brightness_path")
+  maximum=$(<"$brightness_max_path")
+  [[ $current =~ ^[0-9]+$ && $maximum =~ ^[1-9][0-9]*$ ]] || { echo unsupported; return; }
+  printf '%d\n' "$(( (current * 100 + maximum / 2) / maximum ))"
+}
+
+set_brightness_raw() {
+  local requested=$1 maximum
+  discover_backlight || return 0
+  maximum=$(<"$brightness_max_path")
+  [[ $requested =~ ^[0-9]+$ && $maximum =~ ^[1-9][0-9]*$ ]] || return 1
+  (( requested >= 1 && requested <= maximum )) || return 1
+  printf '%s\n' "$requested" >"$brightness_path"
+}
+
+set_brightness_percent() {
+  local requested=$1 maximum target
+  discover_backlight || return 0
+  maximum=$(<"$brightness_max_path")
+  [[ $maximum =~ ^[1-9][0-9]*$ ]] || return 1
+  target=$(( maximum * requested / 100 ))
+  (( target >= 1 )) || target=1
+  set_brightness_raw "$target"
+}
+
+profile_state() {
+  powerprofilesctl get 2>/dev/null || echo unknown
+}
+
+set_profile() {
+  case $1 in
+    power-saver | balanced | performance) powerprofilesctl set "$1" ;;
+    unknown | unsupported | "") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+nvidia_power_state() {
+  local device vendor
+  if [[ -n $nvidia_override ]]; then
+    device=$nvidia_override
+  else
+    device=""
+    for vendor in /sys/bus/pci/devices/*/vendor; do
+      [[ -r $vendor && $(<"$vendor") == 0x10de ]] || continue
+      device=${vendor%/vendor}
+      break
+    done
+  fi
+
+  [[ -n $device ]] || { echo disabled; return; }
+  [[ -r $device/power/runtime_status ]] || { echo unavailable; return; }
+  case $(<"$device/power/runtime_status") in
+    active) echo active ;;
+    suspended | suspending) echo suspended ;;
+    *) echo unavailable ;;
+  esac
+}
+
+status_shell() {
+  local travel quick_dim
+  [[ -r $travel_state ]] && travel=enabled || travel=disabled
+  if [[ -r $dim_state || $travel == enabled ]]; then quick_dim=enabled; else quick_dim=disabled; fi
+
+  printf 'travel\t%s\n' "$travel"
+  printf 'turbo\t%s\n' "$(turbo_state)"
+  printf 'wifi_power\t%s\n' "$(wifi_state)"
+  printf 'quick_dim\t%s\n' "$quick_dim"
+  printf 'brightness\t%s\n' "$(brightness_percent)"
+  printf 'nvidia_power\t%s\n' "$(nvidia_power_state)"
+}
+
+quick_dim_enable() {
+  if [[ ! -r $dim_state ]]; then
+    local previous
+    previous=$(brightness_raw)
+    [[ $previous =~ ^[0-9]+$ ]] || { echo "Display brightness control is unavailable" >&2; return 1; }
+    write_state "$dim_state" brightness "$previous"
+  fi
+  set_brightness_percent 40
+}
+
+quick_dim_disable() {
+  [[ -r $dim_state ]] || return 0
+  local previous
+  previous=$(read_state "$dim_state" brightness || true)
+  set_brightness_raw "$previous"
+  rm -f -- "$dim_state"
+}
+
+travel_enable() {
+  if [[ ! -r $travel_state ]]; then
+    write_state "$travel_state" \
+      profile "$(profile_state)" \
+      turbo "$(turbo_state)" \
+      wifi "$(wifi_state)" \
+      brightness "$(brightness_raw)"
+  fi
+
+  set_profile power-saver
+  [[ $(turbo_state) == unsupported ]] || set_turbo disabled
+  [[ $(wifi_state) == unsupported ]] || set_wifi enabled
+  set_brightness_percent 40
+}
+
+travel_disable() {
+  [[ -r $travel_state ]] || return 0
+  local profile turbo wifi brightness
+  profile=$(read_state "$travel_state" profile || true)
+  turbo=$(read_state "$travel_state" turbo || true)
+  wifi=$(read_state "$travel_state" wifi || true)
+  brightness=$(read_state "$travel_state" brightness || true)
+
+  set_profile "$profile"
+  [[ $turbo == enabled || $turbo == disabled ]] && set_turbo "$turbo"
+  [[ $wifi == enabled || $wifi == disabled ]] && set_wifi "$wifi"
+  [[ $brightness =~ ^[0-9]+$ ]] && set_brightness_raw "$brightness"
+  rm -f -- "$travel_state"
+}
+
+if [[ $action == status && $value == --shell && $# == 2 ]]; then
+  status_shell
+  exit 0
+fi
+
+(( $# == 2 )) || usage
+[[ $value == enable || $value == disable ]] || usage
+case $action in
+  travel | turbo | wifi | quick-dim) ;;
+  *) usage ;;
+esac
+
+require_privilege
+case "$action:$value" in
+  travel:enable) travel_enable ;;
+  travel:disable) travel_disable ;;
+  turbo:enable) set_turbo enabled ;;
+  turbo:disable) set_turbo disabled ;;
+  wifi:enable) set_wifi enabled ;;
+  wifi:disable) set_wifi disabled ;;
+  quick-dim:enable) quick_dim_enable ;;
+  quick-dim:disable) quick_dim_disable ;;
+esac

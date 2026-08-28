@@ -1,4 +1,8 @@
+// Laptop Power Center combines MIT-licensed work from Omarchy,
+// Minokai69/omarchy-laptop-gpu-modes, and patcastle/omarchy-battery-health.
+// See THIRD_PARTY_NOTICES.md and LICENSE for provenance and license notices.
 import QtQuick
+import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.UPower
@@ -14,6 +18,15 @@ Panel {
   // permits — needed for the togglePercentage method below.
   manageIpc: false
   property var batteryInfo: ({})
+  property var limitInfo: ({ state: "unsupported", policy: "unknown" })
+  property var energyInfo: ({
+    travel: "disabled",
+    turbo: "unsupported",
+    wifi_power: "unsupported",
+    quick_dim: "unsupported",
+    brightness: "unknown",
+    nvidia_power: "unavailable"
+  })
   property var systemInfo: ({})
   property var profiles: []
   property string activeProfile: ""
@@ -28,7 +41,18 @@ Panel {
   property string requestedGpuMode: ""
   property bool gpuChangePending: false
   property string gpuError: ""
+  property string limitError: ""
+  property string energyError: ""
   property bool cursorActive: false
+  property string cursorSection: "profiles"
+  readonly property bool limitVisible: limitInfo.state !== "unsupported"
+  readonly property string limitDescription: Model.limitDescription(limitInfo.state, limitInfo.policy)
+  readonly property string limitCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-battery-limit")).replace(/^file:\/\//, ""))
+  readonly property string energyCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-energy-controls")).replace(/^file:\/\//, ""))
+  readonly property bool travelMode: energyInfo.travel === "enabled"
+  readonly property bool energyVisible: energyInfo.turbo !== "unsupported"
+    || energyInfo.wifi_power !== "unsupported"
+    || energyInfo.quick_dim !== "unsupported"
   readonly property bool showPercentage: setting("showPercentage", false) === true
   // With the percentage shown the button paints a text block wider than an
   // icon, so the open-panel mark takes the painted width instead of the
@@ -69,6 +93,45 @@ Panel {
 
   function profileIcon(name) {
     return Model.profileIcon(name)
+  }
+
+  function moveCursor(dx, dy) {
+    if (!cursorActive) {
+      cursorActive = true
+      return
+    }
+
+    if (limitVisible && ((cursorSection === "limit" && dy > 0) || (cursorSection === "profiles" && dy < 0))) {
+      cursorSection = cursorSection === "limit" ? "profiles" : "limit"
+      return
+    }
+
+    if (cursorSection === "profiles") selectProfileByDelta(dx !== 0 ? dx : dy)
+  }
+
+  function activateCursor() {
+    if (!cursorActive) {
+      cursorActive = true
+      return
+    }
+
+    if (cursorSection === "profiles") activateSelectedProfile()
+    else setLimit(limitInfo.state === "enabled" ? "disable" : "enable")
+  }
+
+  function setLimit(action) {
+    if (!action || !limitCommand || limitActionProc.running) return
+    limitError = ""
+    limitActionProc.command = [limitCommand, action]
+    limitActionProc.running = true
+  }
+
+  function setEnergy(control, enabled) {
+    if (!control || !energyCommand || energyActionProc.running) return
+    energyError = ""
+    energyActionProc.command = ["/usr/bin/pkexec", "/usr/bin/bash", energyCommand,
+      control, enabled ? "enable" : "disable"]
+    energyActionProc.running = true
   }
 
   readonly property bool fullyCharged: {
@@ -146,6 +209,8 @@ Panel {
     if (!batteryPresent) return
 
     if (!batteryProc.running) batteryProc.running = true
+    refreshLimit()
+    refreshEnergy()
     if (!profilesProc.running) profilesProc.running = true
     if (!systemProc.running) systemProc.running = true
     if (!gpuCapabilityProc.running) gpuCapabilityProc.running = true
@@ -161,12 +226,25 @@ Panel {
     }
   }
 
+  function refreshLimit() {
+    if (batteryPresent && !limitProc.running) limitProc.running = true
+  }
+
+  function refreshEnergy() {
+    if (batteryPresent && !energyProc.running) energyProc.running = true
+  }
+
   function updateKeyValue(raw, targetName) {
     var next = Model.parseKeyValue(raw)
     // Keep last known good data if a refresh briefly returns nothing — happens
     // around AC plug/unplug events. Avoids the section collapsing mid-transition.
     if (Object.keys(next).length === 0) return
     if (targetName === "battery") batteryInfo = next
+    else if (targetName === "limit") {
+      limitInfo = next
+      if (!cursorActive) cursorSection = next.state !== "unsupported" ? "limit" : "profiles"
+    }
+    else if (targetName === "energy") energyInfo = next
     else systemInfo = next
   }
 
@@ -209,7 +287,12 @@ Panel {
     gpuMode = current
     gpuModes = next
     gpuAvailable = isNvidia && next.length > 1
-    gpuError = ""
+    if (gpuChangePending && requestedGpuMode !== "" && current === requestedGpuMode) {
+      gpuChangePending = false
+      requestedGpuMode = ""
+      gpuError = ""
+      gpuApplyWatchdog.stop()
+    }
   }
 
   function updateGpuPendingAction(raw) {
@@ -230,18 +313,24 @@ Panel {
   function applyGpuMode() {
     if (!gpuAvailable || !requestedGpuMode || gpuChangePending) return
     gpuChangePending = true
+    gpuError = ""
     gpuModeConfirm.opened = false
     gpuConfigProc.command = [gpuClientPath, "-m", requestedGpuMode]
     gpuConfigProc.running = true
+    gpuApplyWatchdog.restart()
   }
 
   function gpuConfigFinished(code) {
     if (code !== 0) {
       gpuChangePending = false
+      gpuApplyWatchdog.stop()
       gpuError = "Unable to request this GPU mode"
       return
     }
-    gpuChangePending = false
+    // supergfxctl exits successfully when the daemon accepts the request,
+    // but the actual switch may wait for logout/reboot. Keep the pending
+    // state until a refresh observes the requested mode or the watchdog
+    // reports the daemon timeout.
     refresh()
   }
 
@@ -259,6 +348,18 @@ Panel {
     function hide() { root.close() }
     function toggle() { root.toggle() }
     function togglePercentage() { root.togglePercentage() }
+    function batteryHealthStatus(): string {
+      return JSON.stringify({
+        command: root.limitCommand,
+        state: root.limitInfo.state || "unknown",
+        policy: root.limitInfo.policy || "unknown",
+        running: limitProc.running,
+        error: root.limitError
+      })
+    }
+    function energyStatus(): string {
+      return JSON.stringify({ info: root.energyInfo, running: energyActionProc.running, error: root.energyError })
+    }
   }
 
   onOpenedChanged: {
@@ -272,10 +373,22 @@ Panel {
       var idx = profiles.indexOf(activeProfile)
       profileIndex = idx >= 0 ? idx : 0
       cursorActive = false
+      cursorSection = limitVisible ? "limit" : "profiles"
     }
   }
 
-  onBatteryPresentChanged: if (!batteryPresent) close()
+  onBatteryPresentChanged: {
+    if (!batteryPresent) close()
+    else {
+      refreshLimit()
+      refreshEnergy()
+    }
+  }
+
+  Component.onCompleted: {
+    refreshLimit()
+    refreshEnergy()
+  }
 
   visible: batteryPresent
   implicitWidth: batteryPresent ? button.implicitWidth : 0
@@ -287,10 +400,53 @@ Panel {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "battery") }
   }
 
+  Timer {
+    id: gpuApplyWatchdog
+    interval: 35000
+    repeat: false
+    onTriggered: {
+      if (!root.gpuChangePending) return
+      root.gpuChangePending = false
+      root.gpuError = "GPU service timed out; log out or reboot to apply " + root.requestedGpuMode
+      root.requestedGpuMode = ""
+      root.refresh()
+    }
+  }
+
+  Process {
+    id: limitProc
+    command: root.limitCommand ? ["/usr/bin/bash", root.limitCommand, "status", "--shell"] : []
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "limit") }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = text.trim()
+        if (message !== "") root.limitError = message
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && root.limitError === "")
+        root.limitError = "Battery protection status check failed (exit " + exitCode + ")"
+    }
+  }
+
   Process {
     id: profilesProc
     command: ["omarchy-powerprofiles-list", "--active-state"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateProfiles(text) }
+  }
+
+  Process {
+    id: energyProc
+    command: root.energyCommand ? ["/usr/bin/bash", root.energyCommand, "status", "--shell"] : []
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "energy") }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = text.trim()
+        if (message !== "") root.energyError = message
+      }
+    }
   }
 
   Process {
@@ -302,6 +458,38 @@ Panel {
   Process {
     id: actionProc
     onExited: root.refresh()
+  }
+
+  Process {
+    id: limitActionProc
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = text.trim()
+        if (message !== "") root.limitError = message
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.limitError = ""
+      else if (root.limitError === "") root.limitError = "Could not update battery protection"
+      root.refresh()
+    }
+  }
+
+  Process {
+    id: energyActionProc
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var message = text.trim()
+        if (message !== "") root.energyError = message
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.energyError = ""
+      else if (root.energyError === "") root.energyError = "Could not update energy controls"
+      root.refresh()
+    }
   }
 
   Process {
@@ -406,7 +594,7 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened && root.batteryPresent
-    focusTarget: keyCatcher
+      focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
@@ -414,20 +602,30 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
-        if (!root.cursorActive) { root.cursorActive = true; return }
-        if (dx !== 0) root.selectProfileByDelta(dx)
-        else if (dy !== 0) root.selectProfileByDelta(dy)
+        root.moveCursor(dx, dy)
+        if (dy !== 0)
+          panelFlick.contentY = Math.max(0, Math.min(panelFlick.contentY + dy * Style.space(56),
+            Math.max(0, panelFlick.contentHeight - panelFlick.height)))
       }
-      onActivateRequested: if (root.cursorActive) root.activateSelectedProfile()
+      onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
-      Column {
-        id: column
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        spacing: Style.space(14)
+      Flickable {
+        id: panelFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+        Column {
+          id: column
+          width: panelFlick.width
+          spacing: Style.space(14)
 
         // ---------- Hero: battery icon · title/status · percentage ----------
         Item {
@@ -559,6 +757,52 @@ Panel {
           }
         }
 
+        // ---------- Battery health ----------
+        Column {
+          visible: root.limitVisible
+          width: parent.width
+          spacing: Style.space(10)
+
+          PanelSeparator {
+            foreground: root.bar.foreground
+          }
+
+          PanelSectionHeader {
+            text: "BATTERY HEALTH"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Preserve battery health"
+            description: root.limitDescription
+            checked: root.limitInfo.state === "enabled"
+            enabled: !limitActionProc.running
+            hasCursor: root.cursorActive && root.cursorSection === "limit"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            onClicked: root.setLimit(root.limitInfo.state === "enabled" ? "disable" : "enable")
+            onHovered: function(h) {
+              if (h) {
+                root.cursorActive = true
+                root.cursorSection = "limit"
+              }
+            }
+          }
+
+          Text {
+            visible: root.limitError !== ""
+            width: parent.width
+            text: root.limitError
+            textFormat: Text.PlainText
+            color: Color.urgent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+        }
+
         // ---------- Power profile picker ----------
         PanelSeparator {
           foreground: root.bar.foreground
@@ -599,16 +843,132 @@ Panel {
                 verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
                 bordered: true
                 active: root.activeProfile === modelData
-                hasCursor: root.cursorActive && root.profileIndex === index
+                hasCursor: root.cursorActive && root.cursorSection === "profiles" && root.profileIndex === index
                 onClicked: root.setProfile(modelData)
                 onHovered: function(h) {
                   if (h) {
                     root.cursorActive = true
+                    root.cursorSection = "profiles"
                     root.profileIndex = index
                   }
                 }
               }
             }
+          }
+        }
+
+        // ---------- Energy controls ----------
+        PanelSeparator {
+          visible: root.energyVisible
+          foreground: root.bar.foreground
+        }
+
+        Column {
+          visible: root.energyVisible
+          width: parent.width
+          spacing: Style.space(8)
+
+          PanelSectionHeader {
+            text: "ENERGY CONTROLS"
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Travel mode"
+            description: "Power-saver, Turbo off, Wi-Fi saving, and 40% brightness"
+            checked: root.travelMode
+            enabled: !energyActionProc.running
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            onClicked: root.setEnergy("travel", !root.travelMode)
+          }
+
+          BorderSurface {
+            id: travelControls
+            visible: root.energyInfo.turbo !== "unsupported"
+              || root.energyInfo.wifi_power !== "unsupported"
+              || root.energyInfo.quick_dim !== "unsupported"
+            width: parent.width - Style.space(12)
+            x: Style.space(6)
+            implicitHeight: nestedTravelControls.implicitHeight + Style.space(20)
+            color: Qt.rgba(root.bar.foreground.r, root.bar.foreground.g, root.bar.foreground.b,
+              root.travelMode ? 0.08 : 0.035)
+            borderSpec: Border.flat(Qt.rgba(root.bar.foreground.r, root.bar.foreground.g,
+              root.bar.foreground.b, root.travelMode ? 0.32 : 0.16), 1)
+            radius: Style.cornerRadius
+
+            Behavior on color { ColorAnimation { duration: 160 } }
+
+            Column {
+              id: nestedTravelControls
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.space(10)
+              anchors.rightMargin: Style.space(10)
+              spacing: Style.space(7)
+
+              Text {
+                width: parent.width
+                text: "TRAVEL MODE CONTROLS"
+                color: root.bar.foreground
+                opacity: 0.55
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.8
+              }
+
+              Toggle {
+                visible: root.energyInfo.turbo !== "unsupported"
+                width: parent.width
+                label: "Turbo Boost"
+                description: "Allow maximum CPU burst performance"
+                checked: root.energyInfo.turbo === "enabled"
+                enabled: !root.travelMode && !energyActionProc.running
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.setEnergy("turbo", root.energyInfo.turbo !== "enabled")
+              }
+
+              Toggle {
+                visible: root.energyInfo.wifi_power !== "unsupported"
+                width: parent.width
+                label: "Wi-Fi power saving"
+                description: "Reduce wireless power use when traffic is idle"
+                checked: root.energyInfo.wifi_power === "enabled"
+                enabled: !root.travelMode && !energyActionProc.running
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.setEnergy("wifi", root.energyInfo.wifi_power !== "enabled")
+              }
+
+              Toggle {
+                visible: root.energyInfo.quick_dim !== "unsupported"
+                width: parent.width
+                label: "Quick dim"
+                description: "Set the display to 40%" + (root.energyInfo.brightness !== "unknown"
+                  ? " (currently " + root.energyInfo.brightness + "%)" : "")
+                checked: root.energyInfo.quick_dim === "enabled"
+                enabled: !root.travelMode && !energyActionProc.running
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.setEnergy("quick-dim", root.energyInfo.quick_dim !== "enabled")
+              }
+            }
+          }
+
+          Text {
+            visible: root.energyError !== ""
+            width: parent.width
+            text: root.energyError
+            textFormat: Text.PlainText
+            color: Color.urgent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
           }
         }
 
@@ -626,6 +986,11 @@ Panel {
             text: "GPU MODE"
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
+          }
+
+          InfoPair {
+            label: "NVIDIA power"
+            value: Model.gpuPowerLabel(root.energyInfo.nvidia_power)
           }
 
           Text {
@@ -672,6 +1037,7 @@ Panel {
             }
           }
         }
+      }
       }
 
       ConfirmDialog {

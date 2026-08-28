@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.minokai69.laptop-gpu-modes",
-  "name": "Laptop GPU Modes",
-  "version": "1.0.1",
-  "author": "Minokai-Dev",
-  "description": "Theme-aware GPU mode controls for NVIDIA hybrid-graphics laptops",
+  "id": "io.github.cbayschm74.laptop-power-center",
+  "name": "Laptop Power Center",
+  "version": "1.0.0",
+  "author": "Carlos Bay-Schmith and contributors",
+  "license": "MIT",
+  "description": "Battery health, travel mode, energy controls, and optional NVIDIA GPU mode support",
   "kinds": [
     "bar-widget"
   ],
@@ -12,9 +13,13 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Laptop GPU Modes",
-    "description": "Theme-aware GPU mode controls for NVIDIA hybrid-graphics laptops",
+    "displayName": "Laptop Power Center",
+    "description": "Battery health, power profiles, travel controls, and optional GPU status.",
     "category": "System",
-    "allowMultiple": false
+    "allowMultiple": false,
+    "defaultSection": "right"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.power"
   }
 }
