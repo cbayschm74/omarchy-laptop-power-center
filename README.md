@@ -2,8 +2,7 @@
 
 A theme-aware replacement for Omarchy's built-in laptop power widget. It
 combines battery charge protection, power profiles, reversible travel controls,
-energy-saving switches, and optional NVIDIA GPU status and mode controls in one
-panel.
+display dimming, and optional NVIDIA GPU status and mode controls in one panel.
 
 ![Laptop Power Center panel showing battery health, power profiles, travel controls, and GPU status](preview.png)
 
@@ -15,10 +14,10 @@ laptops that provide only some of these capabilities.
 - Shows battery level, capacity, charge cycles, charge rate, and remaining time.
 - Enables or disables firmware-backed battery charge protection through UPower.
 - Switches between the power profiles available on the system.
-- Provides CPU Turbo, Wi-Fi power-saving, and reversible 40% Quick Dim controls.
-- Provides a Travel Mode that saves the current profile, Turbo, Wi-Fi, and
-  brightness state; applies energy-saving values; and restores the saved state
-  when disabled.
+- Provides a reversible 40% Quick Dim control.
+- Provides a Travel Mode that saves the current profile, monitor, and
+  brightness; applies Power-saver and 40% brightness; and restores the saved
+  state when disabled.
 - Reports whether an NVIDIA GPU is active, sleeping, disabled, or unavailable.
 - Shows GPU mode controls only when an NVIDIA GPU and a usable `supergfxctl`
   installation report more than one supported mode.
@@ -33,16 +32,12 @@ Its restore point is session-oriented and intentionally expires at reboot.
 
 - Omarchy with the Quickshell plugin system.
 - `upower`, `busctl`, and `powerprofilesctl`, normally provided by Omarchy.
-- `pkexec` for graphical authorization when changing privileged energy controls.
-- `iw` for Wi-Fi power-saving control. The switch is hidden when unsupported.
-- A writable kernel backlight interface for Quick Dim. The switch is hidden when
-  unsupported.
-- Intel P-state Turbo control for the Turbo switch. The switch is hidden when
-  unsupported.
+- Omarchy's `omarchy-brightness-display` command for Quick Dim. The switch is
+  hidden when no controllable display is available.
 - Optional: `supergfxctl` and a working `supergfxd` configuration for GPU modes.
 
 Actual feature support depends on the laptop firmware, kernel drivers, UPower,
-NetworkManager, and vendor GPU tooling.
+and vendor GPU tooling.
 
 ## Install
 
@@ -78,7 +73,7 @@ Disabling or removing the plugin restores the built-in Omarchy power widget. It
 does not change the current charge threshold, GPU mode, power profile, or other
 hardware settings.
 
-## Security and privileged operations
+## Security and system integration
 
 Omarchy plugins run as unsandboxed user code. Review third-party plugins before
 installing them.
@@ -86,11 +81,11 @@ installing them.
 - Battery charge protection calls UPower's D-Bus charge-threshold method.
 - GPU requests invoke the installed `supergfxctl` client with a mode it reports
   as supported.
-- Energy changes use a bundled helper that accepts only the fixed operations
-  `travel`, `turbo`, `wifi`, and `quick-dim`, each with `enable` or `disable`.
-- `pkexec` provides graphical authorization for the privileged energy helper.
-- Reversible Travel Mode state is non-secret, root-owned, stored under `/run`,
-  and removed at reboot.
+- Brightness changes use Omarchy's installed display-brightness command.
+- The bundled energy helper runs only as the current user and accepts the fixed
+  operations `travel` and `quick-dim`, each with `enable` or `disable`.
+- Reversible Travel Mode state is non-secret, user-owned, stored under the
+  session runtime directory, and removed at reboot.
 
 ## Credits and provenance
 

@@ -6,6 +6,7 @@ plugin_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 omarchy plugin validate "$plugin_root"
 grep -F 'Qt.resolvedUrl("bin/omarchy-battery-limit")' "$plugin_root/Panel.qml" >/dev/null
 grep -F 'Qt.resolvedUrl("bin/omarchy-energy-controls")' "$plugin_root/Panel.qml" >/dev/null
+grep -F 'energyActionProc.command = ["/usr/bin/bash", energyCommand' "$plugin_root/Panel.qml" >/dev/null
 
 node - "$plugin_root" <<'JS'
 const root = process.argv[2]
@@ -19,7 +20,12 @@ if (model.gpuPowerLabel('suspended') !== 'Sleeping') throw new Error('sleeping G
 JS
 
 fixture=$(mktemp -d)
-trap 'rm -rf "$fixture"' EXIT
+cleanup() {
+  local status=$?
+  rm -rf "$fixture"
+  exit "$status"
+}
+trap cleanup EXIT
 mkdir -p "$fixture/bin"
 mkdir -p "$fixture/power_supply/BAT0"
 
@@ -69,25 +75,33 @@ grep -Fx $'state\tdisabled' <<<"$status" >/dev/null
 "$plugin_root/bin/omarchy-battery-limit" disable >/dev/null
 grep -Fx $'/org/freedesktop/UPower/devices/battery_BAT0\tfalse' "$BATTERY_CALL_LOG" >/dev/null
 
-# Energy controls run against isolated writable fixtures. Test-mode never
-# bypasses real filesystem permissions; it only redirects this unprivileged
-# test process to the temporary paths below.
+# Energy controls use only user-level, independently authorized system
+# interfaces. The fixture stubs those interfaces without touching live state.
 mkdir -p "$fixture/energy/state" "$fixture/energy/nvidia/power"
-printf '0\n' >"$fixture/energy/no_turbo"
-printf '900\n' >"$fixture/energy/brightness"
-printf '1000\n' >"$fixture/energy/max_brightness"
-printf 'off\n' >"$fixture/energy/wifi_state"
+printf '90\n' >"$fixture/energy/brightness"
 printf 'balanced\n' >"$fixture/energy/profile"
 printf 'active\n' >"$fixture/energy/nvidia/power/runtime_status"
 
-cat >"$fixture/bin/iw" <<'STUB'
+cat >"$fixture/bin/omarchy-hyprland-monitor-focused" <<'STUB'
 #!/bin/bash
-if [[ $3 == get && $4 == power_save ]]; then
-  printf 'Power save: %s\n' "$(<"$ENERGY_WIFI_STATE")"
-elif [[ $3 == set && $4 == power_save ]]; then
-  printf '%s\n' "$5" >"$ENERGY_WIFI_STATE"
+echo eDP-1
+STUB
+
+cat >"$fixture/bin/omarchy-brightness-display" <<'STUB'
+#!/bin/bash
+value=""
+while (( $# > 0 )); do
+  case $1 in
+    --no-osd) shift ;;
+    --monitor) shift 2 ;;
+    *) value=$1; shift ;;
+  esac
+done
+
+if [[ -z $value ]]; then
+  cat "$ENERGY_BRIGHTNESS_STATE"
 else
-  exit 2
+  printf '%s\n' "${value%%%}" >"$ENERGY_BRIGHTNESS_STATE"
 fi
 STUB
 
@@ -100,46 +114,36 @@ case "$1" in
 esac
 STUB
 
-chmod +x "$fixture/bin/iw" "$fixture/bin/powerprofilesctl"
+chmod +x "$fixture/bin/omarchy-hyprland-monitor-focused" \
+  "$fixture/bin/omarchy-brightness-display" "$fixture/bin/powerprofilesctl"
 export OMARCHY_ENERGY_TEST_MODE=1
 export OMARCHY_ENERGY_TEST_PATH="$fixture/bin:/usr/bin:/bin"
 export OMARCHY_ENERGY_STATE_ROOT="$fixture/energy/state"
-export OMARCHY_ENERGY_NO_TURBO_PATH="$fixture/energy/no_turbo"
-export OMARCHY_ENERGY_BRIGHTNESS_PATH="$fixture/energy/brightness"
-export OMARCHY_ENERGY_BRIGHTNESS_MAX_PATH="$fixture/energy/max_brightness"
-export OMARCHY_ENERGY_WIFI_IFACE=wlan-test
 export OMARCHY_ENERGY_NVIDIA_PATH="$fixture/energy/nvidia"
-export ENERGY_WIFI_STATE="$fixture/energy/wifi_state"
+export ENERGY_BRIGHTNESS_STATE="$fixture/energy/brightness"
 export ENERGY_PROFILE_STATE="$fixture/energy/profile"
 
 energy="$plugin_root/bin/omarchy-energy-controls"
 status=$($energy status --shell)
 grep -Fx $'travel\tdisabled' <<<"$status" >/dev/null
-grep -Fx $'turbo\tenabled' <<<"$status" >/dev/null
-grep -Fx $'wifi_power\tdisabled' <<<"$status" >/dev/null
 grep -Fx $'brightness\t90' <<<"$status" >/dev/null
 grep -Fx $'nvidia_power\tactive' <<<"$status" >/dev/null
 
-$energy turbo disable
-grep -Fx '1' "$fixture/energy/no_turbo" >/dev/null
-$energy turbo enable
-grep -Fx '0' "$fixture/energy/no_turbo" >/dev/null
+printf 'unavailable\n' >"$fixture/energy/brightness"
+grep -Fx $'quick_dim\tunsupported' < <($energy status --shell) >/dev/null
+printf '90\n' >"$fixture/energy/brightness"
 
 $energy quick-dim enable
-grep -Fx '400' "$fixture/energy/brightness" >/dev/null
+grep -Fx '40' "$fixture/energy/brightness" >/dev/null
 grep -Fx $'quick_dim\tenabled' < <($energy status --shell) >/dev/null
 $energy quick-dim disable
-grep -Fx '900' "$fixture/energy/brightness" >/dev/null
+grep -Fx '90' "$fixture/energy/brightness" >/dev/null
 
 $energy travel enable
 grep -Fx 'power-saver' "$fixture/energy/profile" >/dev/null
-grep -Fx '1' "$fixture/energy/no_turbo" >/dev/null
-grep -Fx 'on' "$fixture/energy/wifi_state" >/dev/null
-grep -Fx '400' "$fixture/energy/brightness" >/dev/null
+grep -Fx '40' "$fixture/energy/brightness" >/dev/null
 $energy travel disable
 grep -Fx 'balanced' "$fixture/energy/profile" >/dev/null
-grep -Fx '0' "$fixture/energy/no_turbo" >/dev/null
-grep -Fx 'off' "$fixture/energy/wifi_state" >/dev/null
-grep -Fx '900' "$fixture/energy/brightness" >/dev/null
+grep -Fx '90' "$fixture/energy/brightness" >/dev/null
 
 echo "All checks passed"

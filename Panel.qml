@@ -21,8 +21,6 @@ Panel {
   property var limitInfo: ({ state: "unsupported", policy: "unknown" })
   property var energyInfo: ({
     travel: "disabled",
-    turbo: "unsupported",
-    wifi_power: "unsupported",
     quick_dim: "unsupported",
     brightness: "unknown",
     nvidia_power: "unavailable"
@@ -50,9 +48,7 @@ Panel {
   readonly property string limitCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-battery-limit")).replace(/^file:\/\//, ""))
   readonly property string energyCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-energy-controls")).replace(/^file:\/\//, ""))
   readonly property bool travelMode: energyInfo.travel === "enabled"
-  readonly property bool energyVisible: energyInfo.turbo !== "unsupported"
-    || energyInfo.wifi_power !== "unsupported"
-    || energyInfo.quick_dim !== "unsupported"
+  readonly property bool energyVisible: energyInfo.quick_dim !== "unsupported"
   readonly property bool showPercentage: setting("showPercentage", false) === true
   // With the percentage shown the button paints a text block wider than an
   // icon, so the open-panel mark takes the painted width instead of the
@@ -129,8 +125,8 @@ Panel {
   function setEnergy(control, enabled) {
     if (!control || !energyCommand || energyActionProc.running) return
     energyError = ""
-    energyActionProc.command = ["/usr/bin/pkexec", "/usr/bin/bash", energyCommand,
-      control, enabled ? "enable" : "disable"]
+    energyActionProc.command = ["/usr/bin/bash", energyCommand, control,
+      enabled ? "enable" : "disable"]
     energyActionProc.running = true
   }
 
@@ -877,7 +873,7 @@ Panel {
           Toggle {
             width: parent.width
             label: "Travel mode"
-            description: "Power-saver, Turbo off, Wi-Fi saving, and 40% brightness"
+            description: "Power-saver profile and 40% brightness"
             checked: root.travelMode
             enabled: !energyActionProc.running
             foreground: root.bar.foreground
@@ -887,9 +883,7 @@ Panel {
 
           BorderSurface {
             id: travelControls
-            visible: root.energyInfo.turbo !== "unsupported"
-              || root.energyInfo.wifi_power !== "unsupported"
-              || root.energyInfo.quick_dim !== "unsupported"
+            visible: root.energyInfo.quick_dim !== "unsupported"
             width: parent.width - Style.space(12)
             x: Style.space(6)
             implicitHeight: nestedTravelControls.implicitHeight + Style.space(20)
@@ -919,30 +913,6 @@ Panel {
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 font.letterSpacing: 0.8
-              }
-
-              Toggle {
-                visible: root.energyInfo.turbo !== "unsupported"
-                width: parent.width
-                label: "Turbo Boost"
-                description: "Allow maximum CPU burst performance"
-                checked: root.energyInfo.turbo === "enabled"
-                enabled: !root.travelMode && !energyActionProc.running
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                onClicked: root.setEnergy("turbo", root.energyInfo.turbo !== "enabled")
-              }
-
-              Toggle {
-                visible: root.energyInfo.wifi_power !== "unsupported"
-                width: parent.width
-                label: "Wi-Fi power saving"
-                description: "Reduce wireless power use when traffic is idle"
-                checked: root.energyInfo.wifi_power === "enabled"
-                enabled: !root.travelMode && !energyActionProc.running
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
-                onClicked: root.setEnergy("wifi", root.energyInfo.wifi_power !== "enabled")
               }
 
               Toggle {

@@ -34,9 +34,9 @@ Omarchy, with additional live sysfs-state detection and refresh handling.
 
 ## Laptop Power Center additions
 
-The combined layout, Travel Mode, CPU Turbo control, Wi-Fi power saving,
-Quick Dim, NVIDIA runtime-power reporting, capability gating, state refresh,
-tests, and related safety handling were added for Laptop Power Center.
+The combined layout, Travel Mode, Quick Dim, NVIDIA runtime-power reporting,
+capability gating, state refresh, tests, and related safety handling were added
+for Laptop Power Center.
 
 - Copyright: 2026 Carlos Bay-Schmith
 - License: MIT
