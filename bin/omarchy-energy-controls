@@ -17,10 +17,12 @@ if [[ $test_mode == 1 ]]; then
   PATH=${OMARCHY_ENERGY_TEST_PATH:-/usr/share/omarchy/bin:/usr/bin:/bin}
   state_root=${OMARCHY_ENERGY_STATE_ROOT:?Test state root is required}
   nvidia_override=${OMARCHY_ENERGY_NVIDIA_PATH:-}
+  desktop_env=${OMARCHY_ENERGY_TEST_DESKTOP-$XDG_CURRENT_DESKTOP}
 else
   PATH=/usr/share/omarchy/bin:/usr/bin:/bin
   state_root=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-laptop-power-center
   nvidia_override=""
+  desktop_env=${XDG_CURRENT_DESKTOP:-}
 fi
 
 travel_state="$state_root/travel-state"
@@ -77,6 +79,53 @@ set_brightness_percent() {
   fi
 }
 
+set_hyprland_refresh_rate() {
+  command -v hyprctl >/dev/null 2>&1 || return 0
+  [[ $desktop_env == Hyprland ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local fps=$1
+  local monitors
+  monitors=$(hyprctl monitors -j | jq -c '.[]')
+  while IFS= read -r m; do
+    local name width height x y scale
+    name=$(jq -r '.name' <<<"$m")
+    width=$(jq -r '.width' <<<"$m")
+    height=$(jq -r '.height' <<<"$m")
+    x=$(jq -r '.x' <<<"$m")
+    y=$(jq -r '.y' <<<"$m")
+    scale=$(jq -r '.scale' <<<"$m")
+    hyprctl eval "hl.monitor({ output = \"$name\", mode = \"${width}x${height}@${fps}\", position = \"${x}x${y}\", scale = ${scale} })" >/dev/null
+  done <<<"$monitors"
+}
+
+get_hyprland_refresh_state() {
+  command -v hyprctl >/dev/null 2>&1 || return 0
+  [[ $desktop_env == Hyprland ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  hyprctl monitors -j | jq -c '[.[] | {name,width,height,x,y,scale,refreshRate}]' | tr -d '\n'
+}
+
+restore_hyprland_refresh_state() {
+  local serialized=$1
+  [[ -n $serialized ]] || return 0
+  command -v hyprctl >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local monitors
+  monitors=$(jq -c '.[]' <<<"$serialized")
+  while IFS= read -r m; do
+    local name width height x y scale rate
+    name=$(jq -r '.name' <<<"$m")
+    width=$(jq -r '.width' <<<"$m")
+    height=$(jq -r '.height' <<<"$m")
+    x=$(jq -r '.x' <<<"$m")
+    y=$(jq -r '.y' <<<"$m")
+    scale=$(jq -r '.scale' <<<"$m")
+    rate=$(jq -r '.refreshRate' <<<"$m")
+    hyprctl eval "hl.monitor({ output = \"$name\", mode = \"${width}x${height}@${rate}\", position = \"${x}x${y}\", scale = ${scale} })" >/dev/null
+  done <<<"$monitors"
+}
+
 profile_state() {
   powerprofilesctl get 2>/dev/null || echo unknown
 }
@@ -111,6 +160,20 @@ nvidia_power_state() {
   esac
 }
 
+fps_status() {
+  if ! command -v hyprctl >/dev/null 2>&1 \
+    || [[ $desktop_env != Hyprland ]] \
+    || ! command -v jq >/dev/null 2>&1; then
+    echo unsupported
+    return
+  fi
+  if [[ -r $travel_state ]] && [[ -n $(read_state "$travel_state" refresh || true) ]]; then
+    echo limited
+  else
+    echo normal
+  fi
+}
+
 status_shell() {
   local travel quick_dim brightness
   [[ -r $travel_state ]] && travel=enabled || travel=disabled
@@ -127,6 +190,7 @@ status_shell() {
   printf 'quick_dim\t%s\n' "$quick_dim"
   printf 'brightness\t%s\n' "$brightness"
   printf 'nvidia_power\t%s\n' "$(nvidia_power_state)"
+  printf 'fps\t%s\n' "$(fps_status)"
 }
 
 quick_dim_enable() {
@@ -156,22 +220,26 @@ travel_enable() {
     write_state "$travel_state" \
       profile "$(profile_state)" \
       brightness "$(brightness_percent "$monitor")" \
-      monitor "$monitor"
+      monitor "$monitor" \
+      refresh "$(get_hyprland_refresh_state)"
   fi
 
   set_profile power-saver
   set_brightness_percent 40 "$(read_state "$travel_state" monitor || true)"
+  set_hyprland_refresh_rate 60
 }
 
 travel_disable() {
   [[ -r $travel_state ]] || return 0
-  local profile brightness monitor
+  local profile brightness monitor refresh
   profile=$(read_state "$travel_state" profile || true)
   brightness=$(read_state "$travel_state" brightness || true)
   monitor=$(read_state "$travel_state" monitor || true)
+  refresh=$(read_state "$travel_state" refresh || true)
 
   set_profile "$profile"
   [[ $brightness =~ ^[0-9]+$ ]] && set_brightness_percent "$brightness" "$monitor"
+  restore_hyprland_refresh_state "$refresh"
   rm -f -- "$travel_state"
 }
 

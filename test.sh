@@ -97,14 +97,12 @@ while (( $# > 0 )); do
     *) value=$1; shift ;;
   esac
 done
-
 if [[ -z $value ]]; then
   cat "$ENERGY_BRIGHTNESS_STATE"
 else
   printf '%s\n' "${value%%%}" >"$ENERGY_BRIGHTNESS_STATE"
 fi
 STUB
-
 cat >"$fixture/bin/powerprofilesctl" <<'STUB'
 #!/bin/bash
 case "$1" in
@@ -113,15 +111,28 @@ case "$1" in
   *) exit 2 ;;
 esac
 STUB
-
+cat >"$fixture/bin/hyprctl" <<'STUB'
+#!/bin/bash
+if [[ $1 == monitors && $2 == -j ]]; then
+  cat "$ENERGY_HYPR_MONITORS_STATE"
+elif [[ $1 == eval ]]; then
+  printf '%s\n' "$2" >>"$ENERGY_HYPR_CALL_LOG"
+fi
+STUB
 chmod +x "$fixture/bin/omarchy-hyprland-monitor-focused" \
-  "$fixture/bin/omarchy-brightness-display" "$fixture/bin/powerprofilesctl"
+  "$fixture/bin/omarchy-brightness-display" "$fixture/bin/powerprofilesctl" \
+  "$fixture/bin/hyprctl"
 export OMARCHY_ENERGY_TEST_MODE=1
 export OMARCHY_ENERGY_TEST_PATH="$fixture/bin:/usr/bin:/bin"
 export OMARCHY_ENERGY_STATE_ROOT="$fixture/energy/state"
 export OMARCHY_ENERGY_NVIDIA_PATH="$fixture/energy/nvidia"
 export ENERGY_BRIGHTNESS_STATE="$fixture/energy/brightness"
 export ENERGY_PROFILE_STATE="$fixture/energy/profile"
+export OMARCHY_ENERGY_TEST_DESKTOP=""
+export ENERGY_HYPR_MONITORS_STATE="$fixture/energy/monitors.json"
+export ENERGY_HYPR_CALL_LOG="$fixture/energy/hypr-calls"
+printf '[]' >"$ENERGY_HYPR_MONITORS_STATE"
+touch "$ENERGY_HYPR_CALL_LOG"
 
 energy="$plugin_root/bin/omarchy-energy-controls"
 status=$($energy status --shell)
@@ -145,5 +156,6 @@ grep -Fx '40' "$fixture/energy/brightness" >/dev/null
 $energy travel disable
 grep -Fx 'balanced' "$fixture/energy/profile" >/dev/null
 grep -Fx '90' "$fixture/energy/brightness" >/dev/null
+grep -Fx $'fps\tunsupported' < <($energy status --shell) >/dev/null
 
 echo "All checks passed"
