@@ -17,7 +17,7 @@ if [[ $test_mode == 1 ]]; then
   PATH=${OMARCHY_ENERGY_TEST_PATH:-/usr/share/omarchy/bin:/usr/bin:/bin}
   state_root=${OMARCHY_ENERGY_STATE_ROOT:?Test state root is required}
   nvidia_override=${OMARCHY_ENERGY_NVIDIA_PATH:-}
-  desktop_env=${OMARCHY_ENERGY_TEST_DESKTOP-$XDG_CURRENT_DESKTOP}
+  desktop_env=${OMARCHY_ENERGY_TEST_DESKTOP-${XDG_CURRENT_DESKTOP:-}}
 else
   PATH=/usr/share/omarchy/bin:/usr/bin:/bin
   state_root=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-laptop-power-center
@@ -79,51 +79,51 @@ set_brightness_percent() {
   fi
 }
 
-set_hyprland_refresh_rate() {
+apply_hyprland_refresh_state() {
   command -v hyprctl >/dev/null 2>&1 || return 0
   [[ $desktop_env == Hyprland ]] || return 0
   command -v jq >/dev/null 2>&1 || return 0
 
-  local fps=$1
+  local serialized=$1 override_rate=${2:-}
+  [[ -n $serialized ]] || return 0
   local monitors
-  monitors=$(hyprctl monitors -j | jq -c '.[]')
+  monitors=$(jq -c '.[]' <<<"$serialized")
   while IFS= read -r m; do
-    local name width height x y scale
-    name=$(jq -r '.name' <<<"$m")
+    local name width height x y scale rate transform vrr
+    name=$(jq -r '.name | @json' <<<"$m")
     width=$(jq -r '.width' <<<"$m")
     height=$(jq -r '.height' <<<"$m")
     x=$(jq -r '.x' <<<"$m")
     y=$(jq -r '.y' <<<"$m")
     scale=$(jq -r '.scale' <<<"$m")
-    hyprctl eval "hl.monitor({ output = \"$name\", mode = \"${width}x${height}@${fps}\", position = \"${x}x${y}\", scale = ${scale} })" >/dev/null
+    transform=$(jq -r '.transform // 0' <<<"$m")
+    vrr=$(jq -r '.vrr // false' <<<"$m")
+    if [[ -n $override_rate ]]; then
+      rate=$override_rate
+    else
+      rate=$(jq -r '.refreshRate' <<<"$m")
+    fi
+    hyprctl eval "hl.monitor({ output = $name, mode = \"${width}x${height}@${rate}\", position = \"${x}x${y}\", scale = ${scale}, transform = ${transform}, vrr = ${vrr} })" >/dev/null
   done <<<"$monitors"
+}
+
+set_hyprland_refresh_rate() {
+  apply_hyprland_refresh_state "$2" "$1"
 }
 
 get_hyprland_refresh_state() {
   command -v hyprctl >/dev/null 2>&1 || return 0
   [[ $desktop_env == Hyprland ]] || return 0
   command -v jq >/dev/null 2>&1 || return 0
-  hyprctl monitors -j | jq -c '[.[] | {name,width,height,x,y,scale,refreshRate}]' | tr -d '\n'
+  hyprctl monitors -j \
+    | jq -c '[.[] | select(.refreshRate > 60.5) | {name,width,height,x,y,scale,refreshRate,transform,vrr}] | if length > 0 then . else empty end' \
+    | tr -d '\n'
 }
 
 restore_hyprland_refresh_state() {
   local serialized=$1
   [[ -n $serialized ]] || return 0
-  command -v hyprctl >/dev/null 2>&1 || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  local monitors
-  monitors=$(jq -c '.[]' <<<"$serialized")
-  while IFS= read -r m; do
-    local name width height x y scale rate
-    name=$(jq -r '.name' <<<"$m")
-    width=$(jq -r '.width' <<<"$m")
-    height=$(jq -r '.height' <<<"$m")
-    x=$(jq -r '.x' <<<"$m")
-    y=$(jq -r '.y' <<<"$m")
-    scale=$(jq -r '.scale' <<<"$m")
-    rate=$(jq -r '.refreshRate' <<<"$m")
-    hyprctl eval "hl.monitor({ output = \"$name\", mode = \"${width}x${height}@${rate}\", position = \"${x}x${y}\", scale = ${scale} })" >/dev/null
-  done <<<"$monitors"
+  apply_hyprland_refresh_state "$serialized"
 }
 
 profile_state() {
@@ -214,6 +214,7 @@ quick_dim_disable() {
 }
 
 travel_enable() {
+  local refresh
   if [[ ! -r $travel_state ]]; then
     local monitor
     monitor=$(focused_monitor)
@@ -226,7 +227,8 @@ travel_enable() {
 
   set_profile power-saver
   set_brightness_percent 40 "$(read_state "$travel_state" monitor || true)"
-  set_hyprland_refresh_rate 60
+  refresh=$(read_state "$travel_state" refresh || true)
+  [[ -z $refresh ]] || set_hyprland_refresh_rate 60 "$refresh"
 }
 
 travel_disable() {

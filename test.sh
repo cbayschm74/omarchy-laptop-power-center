@@ -128,10 +128,10 @@ export OMARCHY_ENERGY_STATE_ROOT="$fixture/energy/state"
 export OMARCHY_ENERGY_NVIDIA_PATH="$fixture/energy/nvidia"
 export ENERGY_BRIGHTNESS_STATE="$fixture/energy/brightness"
 export ENERGY_PROFILE_STATE="$fixture/energy/profile"
-export OMARCHY_ENERGY_TEST_DESKTOP=""
+export OMARCHY_ENERGY_TEST_DESKTOP=Hyprland
 export ENERGY_HYPR_MONITORS_STATE="$fixture/energy/monitors.json"
 export ENERGY_HYPR_CALL_LOG="$fixture/energy/hypr-calls"
-printf '[]' >"$ENERGY_HYPR_MONITORS_STATE"
+printf '%s\n' '[{"name":"eDP-1","width":2560,"height":1440,"x":0,"y":0,"scale":1.5,"refreshRate":144.0,"transform":1,"vrr":true},{"name":"HDMI-A-1","width":1920,"height":1080,"x":2560,"y":0,"scale":1,"refreshRate":60.0,"transform":0,"vrr":false}]' >"$ENERGY_HYPR_MONITORS_STATE"
 touch "$ENERGY_HYPR_CALL_LOG"
 
 energy="$plugin_root/bin/omarchy-energy-controls"
@@ -139,6 +139,7 @@ status=$($energy status --shell)
 grep -Fx $'travel\tdisabled' <<<"$status" >/dev/null
 grep -Fx $'brightness\t90' <<<"$status" >/dev/null
 grep -Fx $'nvidia_power\tactive' <<<"$status" >/dev/null
+grep -Fx $'fps\tnormal' <<<"$status" >/dev/null
 
 printf 'unavailable\n' >"$fixture/energy/brightness"
 grep -Fx $'quick_dim\tunsupported' < <($energy status --shell) >/dev/null
@@ -153,9 +154,21 @@ grep -Fx '90' "$fixture/energy/brightness" >/dev/null
 $energy travel enable
 grep -Fx 'power-saver' "$fixture/energy/profile" >/dev/null
 grep -Fx '40' "$fixture/energy/brightness" >/dev/null
+grep -F 'output = "eDP-1", mode = "2560x1440@60"' "$ENERGY_HYPR_CALL_LOG" >/dev/null
+grep -F 'transform = 1, vrr = true' "$ENERGY_HYPR_CALL_LOG" >/dev/null
+if grep -F 'HDMI-A-1' "$ENERGY_HYPR_CALL_LOG" >/dev/null; then
+  echo "Travel Mode changed a display already running at 60Hz" >&2
+  exit 1
+fi
+grep -Fx $'fps\tlimited' < <($energy status --shell) >/dev/null
 $energy travel disable
 grep -Fx 'balanced' "$fixture/energy/profile" >/dev/null
 grep -Fx '90' "$fixture/energy/brightness" >/dev/null
+grep -F 'output = "eDP-1", mode = "2560x1440@144' "$ENERGY_HYPR_CALL_LOG" >/dev/null
+[[ $(wc -l <"$ENERGY_HYPR_CALL_LOG") == 2 ]]
+grep -Fx $'fps\tnormal' < <($energy status --shell) >/dev/null
+
+export OMARCHY_ENERGY_TEST_DESKTOP=""
 grep -Fx $'fps\tunsupported' < <($energy status --shell) >/dev/null
 
 echo "All checks passed"

@@ -101,6 +101,8 @@ It preserves and extends work from:
 - [Battery Health for Omarchy](https://github.com/patcastle/omarchy-battery-health)
   by Patrick Castiglia, which provides the original UPower charge-threshold
   integration.
+- [I. Saborit](https://github.com/iSaborit), who contributed the reversible
+  Hyprland refresh-rate limiter used by Travel Mode.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for detailed attribution
 and [LICENSE](LICENSE) for all retained MIT copyright notices.

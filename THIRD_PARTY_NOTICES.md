@@ -38,6 +38,9 @@ The combined layout, Travel Mode, Quick Dim, NVIDIA runtime-power reporting,
 capability gating, state refresh, tests, and related safety handling were added
 for Laptop Power Center.
 
+The reversible Hyprland refresh-rate limiter was contributed by I. Saborit
+([@iSaborit](https://github.com/iSaborit)).
+
 - Copyright: 2026 Carlos Bay-Schmith
 - License: MIT
 

@@ -873,7 +873,7 @@ Panel {
           Toggle {
             width: parent.width
             label: "Travel mode"
-            description: "Power-saver profile and 40% brightness"
+            description: "Power-saver, 40% brightness, and 60Hz refresh cap"
             checked: root.travelMode
             enabled: !energyActionProc.running
             foreground: root.bar.foreground
