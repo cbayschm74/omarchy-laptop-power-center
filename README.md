@@ -15,9 +15,9 @@ laptops that provide only some of these capabilities.
 - Enables or disables firmware-backed battery charge protection through UPower.
 - Switches between the power profiles available on the system.
 - Provides a reversible 40% Quick Dim control.
-- Provides a Travel Mode that saves the current profile, monitor, and
-  brightness; applies Power-saver and 40% brightness; and restores the saved
-  state when disabled.
+- Provides a Travel Mode that saves the current profile, monitor, brightness,
+  and display refresh rate; applies Power-saver, 40% brightness, and a 60Hz
+  refresh cap; and restores the saved state when disabled.
 - Reports whether an NVIDIA GPU is active, sleeping, disabled, or unavailable.
 - Shows GPU mode controls only when an NVIDIA GPU and a usable `supergfxctl`
   installation report more than one supported mode.
@@ -35,6 +35,8 @@ Its restore point is session-oriented and intentionally expires at reboot.
 - Omarchy's `omarchy-brightness-display` command for Quick Dim. The switch is
   hidden when no controllable display is available.
 - Optional: `supergfxctl` and a working `supergfxd` configuration for GPU modes.
+- Requires `jq` to cap the display refresh rate during Travel Mode on
+  Hyprland. Skipped automatically when `jq` is unavailable.
 
 Actual feature support depends on the laptop firmware, kernel drivers, UPower,
 and vendor GPU tooling.
