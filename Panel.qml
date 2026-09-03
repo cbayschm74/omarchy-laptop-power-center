@@ -39,6 +39,7 @@ Panel {
   property string requestedGpuMode: ""
   property bool gpuChangePending: false
   property string gpuError: ""
+  property var gpuTelemetry: ({})
   property string limitError: ""
   property string energyError: ""
   property bool cursorActive: false
@@ -49,6 +50,11 @@ Panel {
   readonly property string energyCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-energy-controls")).replace(/^file:\/\//, ""))
   readonly property bool travelMode: energyInfo.travel === "enabled"
   readonly property bool energyVisible: energyInfo.quick_dim !== "unsupported"
+  readonly property bool nvidiaRuntimeVisible: energyInfo.nvidia_power === "active"
+    || energyInfo.nvidia_power === "suspended"
+  readonly property bool gpuTelemetryVisible: gpuTelemetry.usage !== undefined
+    || gpuTelemetry.power !== undefined
+  readonly property bool gpuSectionVisible: gpuAvailable || nvidiaRuntimeVisible || gpuTelemetryVisible
   readonly property bool showPercentage: setting("showPercentage", false) === true
   // With the percentage shown the button paints a text block wider than an
   // icon, so the open-panel mark takes the painted width instead of the
@@ -210,6 +216,7 @@ Panel {
     if (!profilesProc.running) profilesProc.running = true
     if (!systemProc.running) systemProc.running = true
     if (!gpuCapabilityProc.running) gpuCapabilityProc.running = true
+    refreshGpuTelemetry()
     if (gpuAvailable) {
       if (!gpuPendingActionProc.running) {
         gpuPendingActionProc.command = [gpuClientPath, "-p"]
@@ -230,6 +237,16 @@ Panel {
     if (batteryPresent && !energyProc.running) energyProc.running = true
   }
 
+  function refreshGpuTelemetry() {
+    // nvidia-smi may wake a runtime-suspended GPU on some laptops. Never poll
+    // unless sysfs has already told us the discrete GPU is active.
+    if (energyInfo.nvidia_power !== "active") {
+      gpuTelemetry = ({})
+      return
+    }
+    if (!gpuTelemetryProc.running) gpuTelemetryProc.running = true
+  }
+
   function updateKeyValue(raw, targetName) {
     var next = Model.parseKeyValue(raw)
     // Keep last known good data if a refresh briefly returns nothing — happens
@@ -240,7 +257,10 @@ Panel {
       limitInfo = next
       if (!cursorActive) cursorSection = next.state !== "unsupported" ? "limit" : "profiles"
     }
-    else if (targetName === "energy") energyInfo = next
+    else if (targetName === "energy") {
+      energyInfo = next
+      refreshGpuTelemetry()
+    }
     else systemInfo = next
   }
 
@@ -297,6 +317,10 @@ Panel {
 
   function updateGpuPendingMode(raw) {
     gpuPendingMode = String(raw || "").trim()
+  }
+
+  function updateGpuTelemetry(raw) {
+    gpuTelemetry = Model.parseGpuTelemetry(raw)
   }
 
 
@@ -520,6 +544,15 @@ Panel {
     id: gpuPendingModeProc
     onExited: function(code) {
       if (code !== 0) root.gpuPendingMode = ""
+    }
+  }
+
+  Process {
+    id: gpuTelemetryProc
+    command: ["nvidia-smi", "--query-gpu=utilization.gpu,power.draw", "--format=csv,noheader,nounits"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateGpuTelemetry(text) }
+    onExited: function(code) {
+      if (code !== 0) root.gpuTelemetry = ({})
     }
   }
 
@@ -943,27 +976,41 @@ Panel {
         }
 
         PanelSeparator {
-          visible: root.gpuAvailable
+          visible: root.gpuSectionVisible
           foreground: root.bar.foreground
         }
 
         Column {
-          visible: root.gpuAvailable
+          visible: root.gpuSectionVisible
           width: parent.width
           spacing: Style.space(10)
 
           PanelSectionHeader {
-            text: "GPU MODE"
+            text: "DISCRETE GPU"
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
           }
 
           InfoPair {
+            visible: root.nvidiaRuntimeVisible
             label: "NVIDIA power"
             value: Model.gpuPowerLabel(root.energyInfo.nvidia_power)
           }
 
+          InfoPair {
+            visible: root.gpuTelemetry.usage !== undefined
+            label: "GPU usage"
+            value: root.gpuTelemetry.usage || ""
+          }
+
+          InfoPair {
+            visible: root.gpuTelemetry.power !== undefined
+            label: "Power draw"
+            value: root.gpuTelemetry.power || ""
+          }
+
           Text {
+            visible: root.gpuAvailable
             width: parent.width
             text: root.gpuChangePending
               ? "Applying " + root.requestedGpuMode + "…"
@@ -980,6 +1027,7 @@ Panel {
 
           Row {
             id: gpuModeRow
+            visible: root.gpuAvailable
             width: parent.width
             spacing: Style.space(6)
 

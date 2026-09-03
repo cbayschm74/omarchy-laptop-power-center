@@ -66,6 +66,31 @@ function gpuPowerLabel(state) {
   return "Unavailable"
 }
 
+function parseGpuTelemetry(raw) {
+  var lines = String(raw || "").trim().split(/\r?\n/)
+  var maxUsage = -1
+  var totalPower = 0
+  var powerSamples = 0
+
+  for (var i = 0; i < lines.length; i++) {
+    var fields = lines[i].split(",")
+    if (fields.length < 2) continue
+
+    var usage = Number(fields[0].trim())
+    var power = Number(fields[1].trim())
+    if (Number.isFinite(usage)) maxUsage = Math.max(maxUsage, usage)
+    if (Number.isFinite(power)) {
+      totalPower += power
+      powerSamples++
+    }
+  }
+
+  var result = {}
+  if (maxUsage >= 0) result.usage = Math.round(maxUsage) + "%"
+  if (powerSamples > 0) result.power = totalPower.toFixed(1) + " W"
+  return result
+}
+
 function batteryFraction(device) {
   return device && device.isPresent ? Math.max(0, Math.min(1, device.percentage)) : 0
 }
@@ -119,6 +144,7 @@ if (typeof module !== "undefined") {
     limitDescription: limitDescription,
     profileIcon: profileIcon,
     gpuPowerLabel: gpuPowerLabel,
+    parseGpuTelemetry: parseGpuTelemetry,
     batteryFraction: batteryFraction,
     chargeThresholdActive: chargeThresholdActive,
     batteryIcon: batteryIcon,

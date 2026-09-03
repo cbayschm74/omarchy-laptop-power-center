@@ -17,6 +17,12 @@ if (model.limitDescription('disabled', 'firmware') !== 'Use firmware optimized c
 if (model.selectProfileIndex(0, 1, ['power-saver', 'balanced']) !== 1) throw new Error('existing profile selection')
 if (model.gpuPowerLabel('active') !== 'Active') throw new Error('active GPU state')
 if (model.gpuPowerLabel('suspended') !== 'Sleeping') throw new Error('sleeping GPU state')
+const telemetry = model.parseGpuTelemetry('12, 7.45\n38, 10.25\n')
+if (telemetry.usage !== '38%') throw new Error('GPU utilization telemetry')
+if (telemetry.power !== '17.7 W') throw new Error('GPU power telemetry')
+const partialTelemetry = model.parseGpuTelemetry('N/A, 4.00\n')
+if (partialTelemetry.usage !== undefined || partialTelemetry.power !== '4.0 W') throw new Error('partial GPU telemetry')
+if (Object.keys(model.parseGpuTelemetry('N/A, N/A\n')).length !== 0) throw new Error('unsupported GPU telemetry')
 JS
 
 fixture=$(mktemp -d)

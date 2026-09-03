@@ -19,6 +19,8 @@ laptops that provide only some of these capabilities.
   and display refresh rate; applies Power-saver, 40% brightness, and a 60Hz
   refresh cap; and restores the saved state when disabled.
 - Reports whether an NVIDIA GPU is active, sleeping, disabled, or unavailable.
+- Shows NVIDIA utilization and live power draw when the installed driver
+  exposes those readings. Telemetry polling stops while the GPU is sleeping.
 - Shows GPU mode controls only when an NVIDIA GPU and a usable `supergfxctl`
   installation report more than one supported mode.
 - Uses Omarchy's standard panel, spacing, colors, buttons, confirmation dialogs,
@@ -34,6 +36,7 @@ Its restore point is session-oriented and intentionally expires at reboot.
 - `upower`, `busctl`, and `powerprofilesctl`, normally provided by Omarchy.
 - Omarchy's `omarchy-brightness-display` command for Quick Dim. The switch is
   hidden when no controllable display is available.
+- Optional: NVIDIA's `nvidia-smi` for discrete-GPU utilization and power draw.
 - Optional: `supergfxctl` and a working `supergfxd` configuration for GPU modes.
 - Requires `jq` to cap the display refresh rate during Travel Mode on
   Hyprland. Skipped automatically when `jq` is unavailable.
