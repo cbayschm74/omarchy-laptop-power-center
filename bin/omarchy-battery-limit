@@ -61,9 +61,19 @@ live_thresholds() {
 declare -a batteries=()
 enabled=true
 policy=unknown
+health_samples=""
 
 while IFS= read -r device; do
   [[ $device != */DisplayDevice ]] || continue
+  if [[ $action == status && $(upower_property "$device" Type || true) == 2 &&
+        $(upower_property "$device" IsPresent || true) == true &&
+        $(upower_property "$device" PowerSupply || true) == true ]]; then
+    full=$(upower_property "$device" EnergyFull || true)
+    design=$(upower_property "$device" EnergyFullDesign || true)
+    if [[ $full =~ ^[0-9]+([.][0-9]+)?$ && $design =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      health_samples+="$full $design"$'\n'
+    fi
+  fi
   [[ $(upower_property "$device" ChargeThresholdSupported || true) == true ]] || continue
 
   batteries+=("$device")
@@ -115,6 +125,8 @@ fi
 if [[ $action == status ]]; then
   if [[ $shell_output == true ]]; then
     printf 'state\t%s\npolicy\t%s\n' "$state" "$policy"
+    awk '$1 > 0 && $2 > 0 { full += $1; design += $2 }
+      END { if (design > 0) printf "health\t%.0f\n", 100 * full / design }' <<<"$health_samples"
   else
     case "$state" in
       unsupported) echo "Battery protection is not supported" ;;

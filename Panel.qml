@@ -25,7 +25,6 @@ Panel {
     brightness: "unknown",
     nvidia_power: "unavailable"
   })
-  property var systemInfo: ({})
   property var profiles: []
   property string activeProfile: ""
   property int profileIndex: 0
@@ -48,7 +47,7 @@ Panel {
   readonly property string limitDescription: Model.limitDescription(limitInfo.state, limitInfo.policy)
   readonly property string limitCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-battery-limit")).replace(/^file:\/\//, ""))
   readonly property string energyCommand: decodeURIComponent(String(Qt.resolvedUrl("bin/omarchy-energy-controls")).replace(/^file:\/\//, ""))
-  readonly property bool travelMode: energyInfo.travel === "enabled"
+  readonly property bool travelMode: energyInfo.travel === "enabled" || energyInfo.travel === "partial"
   readonly property bool energyVisible: energyInfo.quick_dim !== "unsupported"
   readonly property bool nvidiaRuntimeVisible: energyInfo.nvidia_power === "active"
     || energyInfo.nvidia_power === "suspended"
@@ -214,9 +213,7 @@ Panel {
     refreshLimit()
     refreshEnergy()
     if (!profilesProc.running) profilesProc.running = true
-    if (!systemProc.running) systemProc.running = true
     if (!gpuCapabilityProc.running) gpuCapabilityProc.running = true
-    refreshGpuTelemetry()
     if (gpuAvailable) {
       if (!gpuPendingActionProc.running) {
         gpuPendingActionProc.command = [gpuClientPath, "-p"]
@@ -240,7 +237,7 @@ Panel {
   function refreshGpuTelemetry() {
     // nvidia-smi may wake a runtime-suspended GPU on some laptops. Never poll
     // unless sysfs has already told us the discrete GPU is active.
-    if (energyInfo.nvidia_power !== "active") {
+    if (!opened || energyInfo.nvidia_power !== "active") {
       gpuTelemetry = ({})
       return
     }
@@ -261,7 +258,6 @@ Panel {
       energyInfo = next
       refreshGpuTelemetry()
     }
-    else systemInfo = next
   }
 
   function updateProfiles(raw) {
@@ -320,7 +316,7 @@ Panel {
   }
 
   function updateGpuTelemetry(raw) {
-    gpuTelemetry = Model.parseGpuTelemetry(raw)
+    gpuTelemetry = opened && energyInfo.nvidia_power === "active" ? Model.parseGpuTelemetry(raw) : ({})
   }
 
 
@@ -469,11 +465,6 @@ Panel {
     }
   }
 
-  Process {
-    id: systemProc
-    command: ["omarchy-system-stats"]
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateKeyValue(text, "system") }
-  }
 
   Process {
     id: actionProc
@@ -535,6 +526,7 @@ Panel {
 
   Process {
     id: gpuPendingActionProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateGpuPendingAction(text) }
     onExited: function(code) {
       if (code !== 0) root.gpuPendingAction = ""
     }
@@ -542,6 +534,7 @@ Panel {
 
   Process {
     id: gpuPendingModeProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateGpuPendingMode(text) }
     onExited: function(code) {
       if (code !== 0) root.gpuPendingMode = ""
     }
@@ -549,7 +542,7 @@ Panel {
 
   Process {
     id: gpuTelemetryProc
-    command: ["nvidia-smi", "--query-gpu=utilization.gpu,power.draw", "--format=csv,noheader,nounits"]
+    command: ["/usr/bin/bash", root.energyCommand, "gpu-telemetry", "--shell"]
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.updateGpuTelemetry(text) }
     onExited: function(code) {
       if (code !== 0) root.gpuTelemetry = ({})
@@ -770,6 +763,7 @@ Panel {
             spacing: Style.spacing.labelGap
             InfoPair { label: "Battery size"; value: root.batteryInfo.size || "" }
             InfoPair { label: "Charge cycles"; value: root.batteryInfo.cycles || "—" }
+            InfoPair { visible: root.limitInfo.health !== undefined; label: "Battery health"; value: (root.limitInfo.health || "") + "%" }
           }
 
           Column {
@@ -906,12 +900,14 @@ Panel {
           Toggle {
             width: parent.width
             label: "Travel mode"
-            description: "Power-saver, 40% brightness, and 60Hz refresh cap"
+            description: root.energyInfo.travel === "partial"
+              ? "Incomplete change — turn off to restore saved settings"
+              : "Power-saver, 40% brightness, and 60Hz refresh cap"
             checked: root.travelMode
             enabled: !energyActionProc.running
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
-            onClicked: root.setEnergy("travel", !root.travelMode)
+            onClicked: root.setEnergy("travel", root.energyInfo.travel === "disabled")
           }
 
           BorderSurface {

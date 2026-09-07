@@ -6,12 +6,19 @@ display dimming, and optional NVIDIA GPU status and mode controls in one panel.
 
 ![Laptop Power Center panel showing battery health, power profiles, travel controls, and GPU status](preview.png)
 
+Version 1.2.0 adds optional GPU utilization/power readings and battery health,
+with safer polling and clearer Travel Mode failure handling. See
+[the changelog](CHANGELOG.md) for the release details. The preview is a real
+ThinkPad P1 capture; unsupported readings such as GPU watts are hidden.
+
 Unsupported controls are hidden automatically, so the panel can be used on
 laptops that provide only some of these capabilities.
 
 ## Features
 
 - Shows battery level, capacity, charge cycles, charge rate, and remaining time.
+- Shows battery health (full-charge capacity relative to design capacity) when
+  UPower supplies valid values; this is separate from the current charge level.
 - Enables or disables firmware-backed battery charge protection through UPower.
 - Switches between the power profiles available on the system.
 - Provides a reversible 40% Quick Dim control.
@@ -20,7 +27,10 @@ laptops that provide only some of these capabilities.
   refresh cap; and restores the saved state when disabled.
 - Reports whether an NVIDIA GPU is active, sleeping, disabled, or unavailable.
 - Shows NVIDIA utilization and live power draw when the installed driver
-  exposes those readings. Telemetry polling stops while the GPU is sleeping.
+  exposes those readings. Queries run only while the panel is open, target the
+  detected NVIDIA display device, and time out after two seconds (with a
+  one-second forced-termination grace period). A fresh runtime-state check skips
+  sleeping GPUs, though a race with runtime suspend cannot be ruled out.
 - Shows GPU mode controls only when an NVIDIA GPU and a usable `supergfxctl`
   installation report more than one supported mode.
 - Uses Omarchy's standard panel, spacing, colors, buttons, confirmation dialogs,
@@ -29,6 +39,10 @@ laptops that provide only some of these capabilities.
 Travel Mode deliberately leaves GPU mode unchanged because a GPU transition
 may require a logout or reboot and may be unsupported by the laptop firmware.
 Its restore point is session-oriented and intentionally expires at reboot.
+If applying or restoring Travel Mode fails, the panel shows an incomplete
+change and retains the restore point. Turn Travel Mode off to retry restoring
+the saved settings. Older restore points without a completion marker also
+appear as incomplete. Manual changes to settings are not continuously reconciled.
 
 ## Requirements
 
@@ -91,6 +105,8 @@ installing them.
   operations `travel` and `quick-dim`, each with `enable` or `disable`.
 - Reversible Travel Mode state is non-secret, user-owned, stored under the
   session runtime directory, and removed at reboot.
+- Saved display values are type- and range-checked before constructing a
+  Hyprland command. GPU telemetry and battery health use read-only queries.
 
 ## Credits and provenance
 

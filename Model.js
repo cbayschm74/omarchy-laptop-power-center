@@ -76,9 +76,11 @@ function parseGpuTelemetry(raw) {
     var fields = lines[i].split(",")
     if (fields.length < 2) continue
 
-    var usage = Number(fields[0].trim())
-    var power = Number(fields[1].trim())
-    if (Number.isFinite(usage)) maxUsage = Math.max(maxUsage, usage)
+    var usageText = fields[0].trim()
+    var powerText = fields[1].trim()
+    var usage = /^\d+(\.\d+)?$/.test(usageText) ? Number(usageText) : NaN
+    var power = /^\d+(\.\d+)?$/.test(powerText) ? Number(powerText) : NaN
+    if (Number.isFinite(usage) && usage <= 100) maxUsage = Math.max(maxUsage, usage)
     if (Number.isFinite(power)) {
       totalPower += power
       powerSamples++

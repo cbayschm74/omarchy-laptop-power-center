@@ -23,6 +23,10 @@ if (telemetry.power !== '17.7 W') throw new Error('GPU power telemetry')
 const partialTelemetry = model.parseGpuTelemetry('N/A, 4.00\n')
 if (partialTelemetry.usage !== undefined || partialTelemetry.power !== '4.0 W') throw new Error('partial GPU telemetry')
 if (Object.keys(model.parseGpuTelemetry('N/A, N/A\n')).length !== 0) throw new Error('unsupported GPU telemetry')
+for (const raw of [',', '101, -4', 'Infinity, NaN']) {
+  if (Object.keys(model.parseGpuTelemetry(raw)).length) throw new Error('invalid telemetry: ' + raw)
+}
+if (model.parseGpuTelemetry('0, 0').usage !== '0%') throw new Error('valid idle reading')
 JS
 
 fixture=$(mktemp -d)
@@ -44,6 +48,10 @@ cat >"$fixture/bin/busctl" <<'STUB'
 #!/bin/bash
 if [[ $1 == get-property ]]; then
   case "$5" in
+    Type) echo 'u 2' ;;
+    IsPresent | PowerSupply) echo 'b true' ;;
+    EnergyFull) echo 'd 80' ;;
+    EnergyFullDesign) echo 'd 100' ;;
     ChargeThresholdSupported) echo "b true" ;;
     ChargeThresholdEnabled) echo "b false" ;;
     ChargeThresholdSettingsSupported) echo "u 3" ;;
@@ -70,6 +78,7 @@ printf '80\n' >"$fixture/power_supply/BAT0/charge_control_end_threshold"
 status=$("$plugin_root/bin/omarchy-battery-limit" status --shell)
 grep -Fx $'state\tenabled' <<<"$status" >/dev/null
 grep -Fx $'policy\t75-80' <<<"$status" >/dev/null
+grep -Fx $'health\t80' <<<"$status" >/dev/null
 
 # UPower keeps its remembered 75/80 policy after disabling it. Live sysfs
 # values must win so the widget follows the actual firmware state.
@@ -106,6 +115,7 @@ done
 if [[ -z $value ]]; then
   cat "$ENERGY_BRIGHTNESS_STATE"
 else
+  [[ ${ENERGY_FAIL_BRIGHTNESS:-0} != 1 ]] || exit 1
   printf '%s\n' "${value%%%}" >"$ENERGY_BRIGHTNESS_STATE"
 fi
 STUB
@@ -173,6 +183,38 @@ grep -Fx '90' "$fixture/energy/brightness" >/dev/null
 grep -F 'output = "eDP-1", mode = "2560x1440@144' "$ENERGY_HYPR_CALL_LOG" >/dev/null
 [[ $(wc -l <"$ENERGY_HYPR_CALL_LOG") == 2 ]]
 grep -Fx $'fps\tnormal' < <($energy status --shell) >/dev/null
+
+# Preserve the restore point on failure, but never report fully enabled.
+if ENERGY_FAIL_BRIGHTNESS=1 $energy travel enable; then
+  echo 'Expected brightness failure' >&2; exit 1
+fi
+grep -Fx $'travel\tpartial' < <($energy status --shell) >/dev/null
+[[ -r $fixture/energy/state/travel-state ]]
+$energy travel disable
+grep -Fx 'balanced' "$fixture/energy/profile" >/dev/null
+
+# Reject a string in a numeric Lua field before any display mutation.
+printf '%s\n' '[{"name":"eDP-1","width":2560,"height":1440,"x":0,"y":0,"scale":"1); os.execute(\"bad\")","refreshRate":144}]' >"$ENERGY_HYPR_MONITORS_STATE"
+before=$(wc -l <"$ENERGY_HYPR_CALL_LOG")
+if $energy travel enable; then echo 'Accepted invalid display state' >&2; exit 1; fi
+[[ $(wc -l <"$ENERGY_HYPR_CALL_LOG") == "$before" ]]
+
+# Query only the selected active GPU; sleeping GPUs must not invoke the driver.
+mkdir -p "$fixture/energy/0000:01:00.0/power"
+export OMARCHY_ENERGY_NVIDIA_PATH="$fixture/energy/0000:01:00.0"
+cat >"$fixture/bin/nvidia-smi" <<'STUB'
+#!/bin/bash
+[[ $1 == -i && $2 == 0000:01:00.0 ]] || exit 1
+printf '12, 7.5\n'
+printf 'queried\n' >>"$ENERGY_GPU_CALL_LOG"
+STUB
+chmod +x "$fixture/bin/nvidia-smi"
+export ENERGY_GPU_CALL_LOG="$fixture/energy/gpu-calls"
+printf 'suspended\n' >"$OMARCHY_ENERGY_NVIDIA_PATH/power/runtime_status"
+[[ -z $($energy gpu-telemetry --shell) && ! -e $ENERGY_GPU_CALL_LOG ]]
+printf 'active\n' >"$OMARCHY_ENERGY_NVIDIA_PATH/power/runtime_status"
+[[ $($energy gpu-telemetry --shell) == '12, 7.5' ]]
+[[ $(wc -l <"$ENERGY_GPU_CALL_LOG") == 1 ]]
 
 export OMARCHY_ENERGY_TEST_DESKTOP=""
 grep -Fx $'fps\tunsupported' < <($energy status --shell) >/dev/null

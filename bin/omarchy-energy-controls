@@ -5,7 +5,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: omarchy-energy-controls status --shell | {travel|quick-dim} {enable|disable}" >&2
+  echo "Usage: omarchy-energy-controls {status|gpu-telemetry} --shell | {travel|quick-dim} {enable|disable}" >&2
   exit 2
 }
 
@@ -26,6 +26,7 @@ else
 fi
 
 travel_state="$state_root/travel-state"
+travel_applied="$state_root/travel-applied"
 dim_state="$state_root/quick-dim-state"
 
 ensure_state_dir() {
@@ -86,6 +87,21 @@ apply_hyprland_refresh_state() {
 
   local serialized=$1 override_rate=${2:-}
   [[ -n $serialized ]] || return 0
+  # Saved state is data, never Lua source. Validate the entire array before
+  # issuing any commands, including numeric types and output identifiers.
+  jq -e '
+    def number_between(a;b): type == "number" and . >= a and . <= b;
+    type == "array" and all(.[];
+      (.name | type == "string" and test("^[A-Za-z0-9_.:-]+$")) and
+      (.width | number_between(1;32768)) and
+      (.height | number_between(1;32768)) and
+      (.x | number_between(-131072;131072)) and
+      (.y | number_between(-131072;131072)) and
+      (.scale | number_between(0.1;10)) and
+      (.refreshRate | number_between(1;1000)) and
+      ((.transform // 0) | number_between(0;7) and floor == .) and
+      ((.vrr // false) | type == "boolean"))
+  ' <<<"$serialized" >/dev/null || { echo "Invalid saved display settings" >&2; return 1; }
   local monitors
   monitors=$(jq -c '.[]' <<<"$serialized")
   while IFS= read -r m; do
@@ -138,7 +154,7 @@ set_profile() {
   esac
 }
 
-nvidia_power_state() {
+nvidia_device() {
   local device vendor
   if [[ -n $nvidia_override ]]; then
     device=$nvidia_override
@@ -147,10 +163,17 @@ nvidia_power_state() {
     for vendor in /sys/bus/pci/devices/*/vendor; do
       [[ -r $vendor && $(<"$vendor") == 0x10de ]] || continue
       device=${vendor%/vendor}
+      [[ -r $device/class && $(<"$device/class") == 0x03* ]] || { device=""; continue; }
       break
     done
   fi
 
+  printf '%s' "$device"
+}
+
+nvidia_power_state() {
+  local device
+  device=$(nvidia_device)
   [[ -n $device ]] || { echo disabled; return; }
   [[ -r $device/power/runtime_status ]] || { echo unavailable; return; }
   case $(<"$device/power/runtime_status") in
@@ -158,6 +181,20 @@ nvidia_power_state() {
     suspended | suspending) echo suspended ;;
     *) echo unavailable ;;
   esac
+}
+
+gpu_telemetry() {
+  local device address
+  device=$(nvidia_device)
+  [[ -n $device ]] || return 0
+  address=${device##*/}
+  [[ $address =~ ^[[:xdigit:]]{4}:[[:xdigit:]]{2}:[[:xdigit:]]{2}\.[0-7]$ ]] || return 0
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  # Fresh check of the selected display device, immediately before querying.
+  # There remains an unavoidable race with kernel runtime suspend.
+  [[ -r $device/power/runtime_status && $(<"$device/power/runtime_status") == active ]] || return 0
+  timeout -k 1s 2s nvidia-smi -i "$address" \
+    --query-gpu=utilization.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null || true
 }
 
 fps_status() {
@@ -168,7 +205,7 @@ fps_status() {
     return
   fi
   if [[ -r $travel_state ]] && [[ -n $(read_state "$travel_state" refresh || true) ]]; then
-    echo limited
+    if [[ -r $travel_applied ]]; then echo limited; else echo unknown; fi
   else
     echo normal
   fi
@@ -176,7 +213,11 @@ fps_status() {
 
 status_shell() {
   local travel quick_dim brightness
-  [[ -r $travel_state ]] && travel=enabled || travel=disabled
+  travel=disabled
+  if [[ -r $travel_state ]]; then
+    travel=partial
+    [[ ! -r $travel_applied ]] || travel=enabled
+  fi
   brightness=$(brightness_percent)
   if [[ ! $brightness =~ ^[0-9]+$ ]]; then
     quick_dim=unsupported
@@ -225,14 +266,17 @@ travel_enable() {
       refresh "$(get_hyprland_refresh_state)"
   fi
 
+  rm -f -- "$travel_applied"
   set_profile power-saver
   set_brightness_percent 40 "$(read_state "$travel_state" monitor || true)"
   refresh=$(read_state "$travel_state" refresh || true)
   [[ -z $refresh ]] || set_hyprland_refresh_rate 60 "$refresh"
+  write_state "$travel_applied" applied true
 }
 
 travel_disable() {
   [[ -r $travel_state ]] || return 0
+  rm -f -- "$travel_applied"
   local profile brightness monitor refresh
   profile=$(read_state "$travel_state" profile || true)
   brightness=$(read_state "$travel_state" brightness || true)
@@ -247,6 +291,11 @@ travel_disable() {
 
 if [[ $action == status && $value == --shell && $# == 2 ]]; then
   status_shell
+  exit 0
+fi
+
+if [[ $action == gpu-telemetry && $value == --shell && $# == 2 ]]; then
+  gpu_telemetry
   exit 0
 fi
 
