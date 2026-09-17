@@ -87,6 +87,13 @@ printf '100\n' >"$fixture/power_supply/BAT0/charge_control_end_threshold"
 status=$("$plugin_root/bin/omarchy-battery-limit" status --shell)
 grep -Fx $'state\tdisabled' <<<"$status" >/dev/null
 
+# Some firmware (Dell) leaves a non-zero start when protection is off, e.g.
+# 50/100. Stop at 100 means not limited; start must not override that.
+printf '50\n' >"$fixture/power_supply/BAT0/charge_control_start_threshold"
+printf '100\n' >"$fixture/power_supply/BAT0/charge_control_end_threshold"
+status=$("$plugin_root/bin/omarchy-battery-limit" status --shell)
+grep -Fx $'state\tdisabled' <<<"$status" >/dev/null
+
 "$plugin_root/bin/omarchy-battery-limit" disable >/dev/null
 grep -Fx $'/org/freedesktop/UPower/devices/battery_BAT0\tfalse' "$BATTERY_CALL_LOG" >/dev/null
 
