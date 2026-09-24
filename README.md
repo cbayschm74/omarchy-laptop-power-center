@@ -124,6 +124,8 @@ It preserves and extends work from:
   integration.
 - [I. Saborit](https://github.com/iSaborit), who contributed the reversible
   Hyprland refresh-rate limiter used by Travel Mode.
+- [Aaron Bird](https://github.com/artbird309), who contributed the Dell
+  `50/100` charge-threshold detection fix in version 1.2.1.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for detailed attribution
 and [LICENSE](LICENSE) for all retained MIT copyright notices.
