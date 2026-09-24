@@ -50,8 +50,8 @@ live_thresholds() {
   [[ $start =~ ^[0-9]+$ || $end =~ ^[0-9]+$ ]] || return 1
 
   state=false
-  if [[ $end =~ ^[0-9]+$ ]] && (( end < 100 )); then
-    state=true
+  if [[ $end =~ ^[0-9]+$ ]]; then
+    (( end < 100 )) && state=true
   elif [[ $start =~ ^[0-9]+$ ]] && (( start > 0 )); then
     state=true
   fi
