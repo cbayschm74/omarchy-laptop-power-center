@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.cbayschm74.laptop-power-center",
   "name": "Laptop Power Center",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Carlos Bay-Schmith and contributors",
   "license": "MIT",
   "description": "Battery health, travel mode, energy controls, and optional NVIDIA GPU mode support",

@@ -6,8 +6,10 @@ display dimming, and optional NVIDIA GPU status and mode controls in one panel.
 
 ![Laptop Power Center panel showing battery health, power profiles, travel controls, and GPU status](preview.png)
 
-Version 1.2.0 adds optional GPU utilization/power readings and battery health,
-with safer polling and clearer Travel Mode failure handling. See
+Version 1.2.1 fixes battery-protection detection on systems that retain a
+nonzero resume threshold when the stop threshold is 100%. Version 1.2.0 added
+optional GPU utilization/power readings and battery health, with safer polling
+and clearer Travel Mode failure handling. See
 [the changelog](CHANGELOG.md) for the release details. The preview is a real
 ThinkPad P1 capture; unsupported readings such as GPU watts are hidden.
 

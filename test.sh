@@ -94,6 +94,13 @@ printf '100\n' >"$fixture/power_supply/BAT0/charge_control_end_threshold"
 status=$("$plugin_root/bin/omarchy-battery-limit" status --shell)
 grep -Fx $'state\tdisabled' <<<"$status" >/dev/null
 
+# Hardware that exposes only a start threshold still uses it as the best
+# available indication that charge protection is active.
+rm "$fixture/power_supply/BAT0/charge_control_end_threshold"
+printf '75\n' >"$fixture/power_supply/BAT0/charge_control_start_threshold"
+status=$("$plugin_root/bin/omarchy-battery-limit" status --shell)
+grep -Fx $'state\tenabled' <<<"$status" >/dev/null
+
 "$plugin_root/bin/omarchy-battery-limit" disable >/dev/null
 grep -Fx $'/org/freedesktop/UPower/devices/battery_BAT0\tfalse' "$BATTERY_CALL_LOG" >/dev/null
 
